@@ -580,8 +580,14 @@ class ScreenCaptureApp(QWidget):
             except Exception as e:
                 print(f"关闭浮动窗口时出错: {e}")
         
-        # 注意：我们不关闭截图编辑器，因为它可能只是隐藏状态
-        # 当用户按Ctrl+R时我们会检查它是否存在
+        # 关闭截图编辑器（如果存在）
+        if hasattr(self, 'screenshot_editor') and self.screenshot_editor is not None:
+            try:
+                print("关闭遗留的截图编辑器")
+                self.screenshot_editor.close()
+                self.screenshot_editor = None
+            except Exception as e:
+                print(f"关闭截图编辑器时出错: {e}")
         
         # 重置浮动截图模式
         self.is_floating = False
@@ -748,17 +754,7 @@ class ScreenCaptureApp(QWidget):
         """开始一个用于编辑的截图操作"""
         print("开始编辑截图操作...")
         
-        # 如果编辑器已存在且只是隐藏了，直接显示它
-        if hasattr(self, 'screenshot_editor') and self.screenshot_editor is not None:
-            try:
-                # 尝试显示现有的编辑器
-                self.screenshot_editor.show()
-                print("显示已有的截图编辑器")
-                return
-            except Exception as e:
-                print(f"无法显示已有编辑器，将创建新的: {e}")
-                self.screenshot_editor = None
-        
+        # 每次都重新截取区域进行编辑，不再检查是否有旧的编辑器
         self.is_editing = True  # 标记为编辑模式
         self.start_screenshot()
 
@@ -859,7 +855,8 @@ class ScreenCaptureApp(QWidget):
         # 重置编辑模式
         self.is_editing = False
         
-        # 注意：不要关闭截图编辑器，用户可能还需要继续使用
+        # 清除编辑器引用，确保下次重新创建
+        self.screenshot_editor = None
 
     def quit_app(self):
         print("退出程序")

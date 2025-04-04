@@ -303,7 +303,7 @@ class ScreenshotEditor(QWidget):
         copy_painter.drawRect(4, 8, 12, 12)
         copy_painter.end()
         copy_action.setIcon(QIcon(copy_pixmap))
-        copy_action.setToolTip("复制到剪贴板并关闭")
+        copy_action.setToolTip("复制到剪贴板并隐藏")
         copy_action.triggered.connect(self.copyToClipboard)
         self.toolbar.addAction(copy_action)
         
@@ -1331,11 +1331,14 @@ class ScreenshotEditor(QWidget):
             QApplication.clipboard().setPixmap(temp_pixmap)
             print("已复制带有标记的图像到剪贴板")
             
-            # 发出编辑完成信号，但不关闭窗口，只隐藏
-            self.hide()
-            
-            # 通知父应用，已完成编辑
+            # 发出编辑完成信号但不关闭窗口，而是隐藏它
             self.editingFinished.emit(temp_pixmap)
+            self.hide()  # 隐藏窗口而不是关闭
+            
+            # 清空当前绘制内容，准备下次使用
+            self.shapes = []
+            self.current_pixmap = QPixmap(self.original_pixmap)
+            self.updateImageLabel()
 
     def getHandleAtPosition(self, pos):
         """检查指定位置是否有控制点，返回(形状索引, 控制点索引)"""
