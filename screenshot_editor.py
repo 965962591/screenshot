@@ -1419,14 +1419,17 @@ class ScreenshotEditor(QWidget):
             QApplication.clipboard().setPixmap(temp_pixmap)
             print("已复制带有标记的图像到剪贴板")
             
-            # 发出编辑完成信号但不关闭窗口，而是隐藏它
+            # 发出编辑完成信号但不复制到剪贴板
             self.editingFinished.emit(temp_pixmap)
-            self.hide()  # 隐藏窗口而不是关闭
-            
-            # 清空当前绘制内容，准备下次使用
-            self.shapes = []
-            self.current_pixmap = QPixmap(self.original_pixmap)
-            self.updateImageLabel()
+            print("已隐藏编辑界面")
+        
+        # 清空当前绘制内容，准备下次使用
+        self.shapes = []
+        self.current_pixmap = QPixmap(self.original_pixmap)
+        self.updateImageLabel()
+        
+        # 隐藏窗口但不关闭
+        self.hide()
 
     def getHandleAtPosition(self, pos):
         """检查指定位置是否有控制点，返回(形状索引, 控制点索引)"""
@@ -1521,6 +1524,23 @@ class ScreenshotEditor(QWidget):
         # 如果正在输入文本，结束文本输入
         if self.is_text_input and self.current_text:
             self.finishTextInput()
+        
+        # 获取当前显示的图像（即使不复制也需要）
+        if self.current_pixmap:
+            # 创建一个临时的pixmap，确保包含所有绘制的内容
+            temp_pixmap = QPixmap(self.current_pixmap)
+            painter = QPainter(temp_pixmap)
+            painter.setRenderHint(QPainter.Antialiasing)
+            
+            # 绘制所有形状
+            for shape in self.shapes:
+                self.drawShape(painter, shape)
+                
+            painter.end()
+            
+            # 发出编辑完成信号但不复制到剪贴板
+            self.editingFinished.emit(temp_pixmap)
+            print("已隐藏编辑界面")
         
         # 清空当前绘制内容，准备下次使用
         self.shapes = []
