@@ -11,6 +11,7 @@ import win32con
 import win32gui
 import ctypes
 from ctypes import wintypes
+from floating_window import create_floating_window
 
 def print_help():
     """打印帮助信息"""
@@ -62,12 +63,22 @@ class MouseTracker(QWidget):
     
     def check_mouse_position(self):
         cursor_pos = QCursor.pos()
+        
+        # 检查鼠标是否移动到新的屏幕
         for i, screen in enumerate(self.screens):
             if screen.geometry().contains(cursor_pos):
                 if i != self.current_screen_index:
+                    # 更新当前屏幕索引
+                    old_screen_index = self.current_screen_index
                     self.current_screen_index = i
+                    
+                    # 打印详细的屏幕切换信息
                     info = self.screen_info[i]
-                    print(f"鼠标移动到屏幕 {i+1}: {info['name']} - 分辨率: {info['size']} 位置: {info['position']}")
+                    if old_screen_index != -1:
+                        print(f"鼠标从屏幕 {old_screen_index+1} 移动到屏幕 {i+1}: {info['name']} - {info['size']} 位置: {info['position']}")
+                    else:
+                        print(f"鼠标移动到屏幕 {i+1}: {info['name']} - {info['size']} 位置: {info['position']}")
+                    
                     print(f"鼠标坐标: ({cursor_pos.x()}, {cursor_pos.y()})")
                 break
 
@@ -217,6 +228,19 @@ class ScreenOverlay(QWidget):
         
         # 计算相对于屏幕的坐标
         screen_info = QApplication.screens()[self.screen_number].geometry()
+        
+        # 如果选区太小，不进行截图
+        if selected_rect.width() < 10 or selected_rect.height() < 10:
+            print("选择的区域太小，请重新选择 (至少 10x10 像素)")
+            return
+        
+        # 检查是否是浮动截图模式
+        if hasattr(self.parent_app, 'is_floating') and self.parent_app.is_floating:
+            self.parent_app.capture_floating_screenshot(selected_rect, screen_info)
+            self.parent_app.is_floating = False  # 重置浮动标记
+            return
+        
+        # 原有的普通截图逻辑
         left = selected_rect.left() + screen_info.left()
         top = selected_rect.top() + screen_info.top()
         width = selected_rect.width()
@@ -277,22 +301,44 @@ class ScreenOverlay(QWidget):
         # 确保在窗口关闭时断开信号连接并更新父应用状态
         if self.parent_app:
             try:
-                # 断开信号连接
-                print(f"断开鼠标跟踪器与update_active_screen的连接")
-                # 正确的disconnect方法用法：
-                try:
-                    self.parent_app.mouse_tracker.timer.timeout.disconnect(self.parent_app.update_active_screen)
-                except TypeError:
-                    print("无法断开信号: 可能没有连接")
+                # 检查是否是在屏幕切换过程中被关闭的
+                is_switching_screens = False
                 
-                # 重置父应用状态
-                print(f"重置ScreenCaptureApp状态: active_screen_index={self.parent_app.active_screen_index}->{-1}")
-                self.parent_app.active_screen_index = -1
-                self.parent_app.current_overlay = None
+                # 获取当前鼠标位置
+                cursor_pos = QCursor.pos()
+                
+                # 如果鼠标位置不在当前屏幕内，可能是在切换屏幕
+                for i, screen in enumerate(QApplication.screens()):
+                    if (screen.geometry().contains(cursor_pos) and
+                        i != self.screen_number and
+                        self.parent_app.active_screen_index != -1):
+                        is_switching_screens = True
+                        print(f"检测到屏幕切换：从屏幕 {self.screen_number+1} 到屏幕 {i+1}")
+                        break
+                
                 # 从overlays列表中删除自己
                 if self in self.parent_app.overlays:
                     self.parent_app.overlays.remove(self)
                     print(f"从overlays列表中移除窗口, 剩余: {len(self.parent_app.overlays)}")
+                
+                # 仅在不是屏幕切换时才断开连接和重置状态
+                if not is_switching_screens:
+                    print(f"窗口完全关闭，断开信号连接")
+                    # 断开信号连接
+                    try:
+                        self.parent_app.mouse_tracker.timer.timeout.disconnect(self.parent_app.update_active_screen)
+                        print("已断开鼠标跟踪器与update_active_screen的连接")
+                    except TypeError:
+                        print("无法断开信号: 可能没有连接")
+                    
+                    # 重置父应用状态
+                    print(f"重置ScreenCaptureApp状态: active_screen_index={self.parent_app.active_screen_index}->{-1}")
+                    self.parent_app.active_screen_index = -1
+                    self.parent_app.current_overlay = None
+                else:
+                    # 如果是屏幕切换，只在日志中记录，不执行断开连接操作
+                    print(f"屏幕切换过程中，保持信号连接状态")
+                
             except (TypeError, ValueError) as e:
                 # 如果连接不存在或移除失败，忽略错误
                 print(f"关闭窗口时发生错误: {e}")
@@ -301,6 +347,7 @@ class ScreenOverlay(QWidget):
 
 # 定义全局热键ID
 HOTKEY_ID = 1
+FLOATING_HOTKEY_ID = 2  # 新增的热键ID
 
 # 为WM_HOTKEY消息设置窗口消息过滤器
 class WinEventFilter(QWidget):
@@ -312,11 +359,16 @@ class WinEventFilter(QWidget):
     
     def nativeEvent(self, eventType, message):
         msg = ctypes.wintypes.MSG.from_address(int(message))
-        if msg.message == win32con.WM_HOTKEY and msg.wParam == HOTKEY_ID:
-            # 确保在开始新截图前重置状态
-            self.parent.reset_screenshot_state()
-            self.parent.start_screenshot()
-            return True, 0
+        if msg.message == win32con.WM_HOTKEY:
+            if msg.wParam == HOTKEY_ID:
+                # 确保在开始新截图前重置状态
+                self.parent.reset_screenshot_state()
+                self.parent.start_screenshot()
+                return True, 0
+            elif msg.wParam == FLOATING_HOTKEY_ID:  # 新增的热键ID处理
+                self.parent.reset_screenshot_state()
+                self.parent.start_floating_screenshot()
+                return True, 0
         return False, 0
 
 class ScreenCaptureApp(QWidget):
@@ -357,6 +409,9 @@ class ScreenCaptureApp(QWidget):
         
         # 隐藏主窗口
         self.hide()
+        
+        self.is_floating = False  # 添加浮动截图模式标记
+        self.floating_window = None  # 添加浮动窗口引用
     
     def init_ui(self):
         # 创建系统托盘图标
@@ -414,9 +469,15 @@ class ScreenCaptureApp(QWidget):
         # 注册全局热键
         hwnd = int(self.event_filter.winId())
         if not win32gui.RegisterHotKey(hwnd, HOTKEY_ID, win32con.MOD_CONTROL, ord('Q')):
-            print("注册全局热键失败")
+            print("注册全局热键Ctrl+Q失败")
         else:
             print("已注册全局热键: Ctrl+Q (用于开始截图)")
+        
+        # 注册Ctrl+W全局热键
+        if not win32gui.RegisterHotKey(hwnd, FLOATING_HOTKEY_ID, win32con.MOD_CONTROL, ord('W')):
+            print("注册全局热键Ctrl+W失败")
+        else:
+            print("已注册全局热键: Ctrl+W (用于浮动截图)")
     
     def update_active_screen(self):
         # 此方法仅在已经开始截图时使用，用于在截图过程中切换屏幕
@@ -429,18 +490,41 @@ class ScreenCaptureApp(QWidget):
                     # 如果鼠标移动到了不同的屏幕，更新遮罩
                     if i != self.active_screen_index:
                         print(f"鼠标移动到屏幕 {i+1}, 切换活动屏幕 {self.active_screen_index+1}->{i+1}")
+                        
+                        # 先保存当前屏幕索引
+                        old_screen_index = self.active_screen_index
+                        
+                        # 更新屏幕索引，确保在关闭旧窗口前已更新
+                        self.active_screen_index = i
+                        
                         # 关闭当前遮罩
                         if self.current_overlay:
-                            print(f"关闭屏幕 {self.active_screen_index+1} 的遮罩")
-                            self.current_overlay.close()
+                            print(f"关闭屏幕 {old_screen_index+1} 的遮罩")
+                            old_overlay = self.current_overlay
+                            self.current_overlay = None  # 先置空，避免引用问题
+                            old_overlay.close()
                             # 不需要在这里移除，closeEvent会处理
+                        
+                        # 强制处理事件，确保旧窗口完全关闭
+                        QApplication.processEvents()
                         
                         # 为新的屏幕创建遮罩
                         geometry = screen.geometry()
                         print(f"创建屏幕 {i+1} 的新遮罩")
                         self.current_overlay = ScreenOverlay(i, geometry, True)
                         self.overlays.append(self.current_overlay)
-                        self.active_screen_index = i
+                        
+                        # 确保窗口显示并处于最前端
+                        self.current_overlay.showFullScreen()
+                        self.current_overlay.raise_()  # 提升窗口Z顺序到最前
+                        self.current_overlay.activateWindow()  # 提高窗口优先级
+                        
+                        # 强制重绘窗口
+                        self.current_overlay.update()
+                        
+                        # 强制处理一次事件
+                        QApplication.processEvents()
+                        
                         print(f"激活屏幕 {i+1} 用于截图 - 鼠标位置: ({cursor_pos.x()}, {cursor_pos.y()})")
                     break
     
@@ -467,6 +551,18 @@ class ScreenCaptureApp(QWidget):
             print(f"关闭遗留的截图窗口: 屏幕 {overlay.screen_number+1}")
             overlay.close()
         
+        # 关闭任何存在的浮动窗口
+        if hasattr(self, 'floating_window') and self.floating_window is not None:
+            try:
+                print("关闭遗留的浮动窗口")
+                self.floating_window.close()
+                self.floating_window = None
+            except Exception as e:
+                print(f"关闭浮动窗口时出错: {e}")
+        
+        # 重置浮动截图模式
+        self.is_floating = False
+        
         # 重置状态变量
         self.active_screen_index = -1
         self.current_overlay = None
@@ -482,6 +578,9 @@ class ScreenCaptureApp(QWidget):
             # 强制重置状态以确保能够开始新的截图
             self.reset_screenshot_state()
             
+        # 确保处理所有待处理事件，防止出现在重置状态后仍有窗口未关闭的情况
+        QApplication.processEvents()
+        
         # 获取当前鼠标位置
         cursor_pos = QCursor.pos()
         
@@ -496,6 +595,16 @@ class ScreenCaptureApp(QWidget):
                 print(f"创建屏幕 {i+1} 的遮罩: 位置({geometry.left()}, {geometry.top()}), 大小({geometry.width()}x{geometry.height()})")
                 self.current_overlay = ScreenOverlay(i, geometry, True)
                 self.overlays.append(self.current_overlay)
+                
+                # 确保窗口显示并处于最前端
+                self.current_overlay.showFullScreen()
+                self.current_overlay.raise_()
+                self.current_overlay.activateWindow()
+                
+                # 强制重绘和处理事件
+                self.current_overlay.update()
+                QApplication.processEvents()
+                
                 print(f"当前活动窗口数量: {len(self.overlays)}")
                 
                 # 开始截图后，连接鼠标跟踪器信号以允许在不同屏幕间切换
@@ -517,12 +626,105 @@ class ScreenCaptureApp(QWidget):
         if self.current_overlay is None:
             print("未能找到鼠标所在的屏幕，截图操作取消")
     
+    def start_floating_screenshot(self):
+        """开始浮动截图操作"""
+        print("开始浮动截图操作...")
+        self.is_floating = True  # 标记为浮动截图模式
+        self.start_screenshot()
+
+    def capture_floating_screenshot(self, selected_rect, screen_info):
+        """执行浮动截图"""
+        try:
+            print("开始执行浮动截图...")
+            # 隐藏所有窗口以便截图
+            for widget in QApplication.topLevelWidgets():
+                if isinstance(widget, ScreenOverlay):
+                    widget.hide()
+            QApplication.processEvents()
+            
+            # 使用mss进行截图
+            with mss.mss() as sct:
+                # 计算截图区域
+                monitor = {
+                    "left": selected_rect.left() + screen_info.left(),
+                    "top": selected_rect.top() + screen_info.top(),
+                    "width": selected_rect.width(),
+                    "height": selected_rect.height()
+                }
+                
+                print(f"截图区域: 左上角({monitor['left']}, {monitor['top']}), 宽x高({monitor['width']}x{monitor['height']})")
+                
+                try:
+                    # 抓取屏幕
+                    screenshot = sct.grab(monitor)
+                    
+                    # 确保截图数据有效
+                    if screenshot.size[0] <= 0 or screenshot.size[1] <= 0:
+                        print(f"截图大小无效: {screenshot.size}")
+                        return
+                    
+                    print(f"成功抓取屏幕，图像大小: {screenshot.size[0]}x{screenshot.size[1]}")
+                    
+                    try:
+                        # 转换截图为PIL图像
+                        img = Image.frombytes("RGB", screenshot.size, screenshot.rgb)
+                        
+                        # 临时保存文件，确保图像数据正确
+                        if not os.path.exists("output"):
+                            os.makedirs("output")
+                        
+                        # 生成临时文件名
+                        import datetime
+                        timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+                        temp_filename = f"output/floating_{timestamp}.png"
+                        img.save(temp_filename)
+                        print(f"临时文件已保存: {temp_filename}")
+                        
+                        # 使用保存的文件创建QPixmap (更可靠的方法)
+                        pixmap = QPixmap(temp_filename)
+                        
+                        # 如果直接从文件创建失败，尝试使用QImage作为中介
+                        if pixmap.isNull():
+                            print("使用临时文件创建QPixmap失败，尝试使用QImage...")
+                            # 从保存的文件加载QImage
+                            qimg = QImage(temp_filename)
+                            if not qimg.isNull():
+                                pixmap = QPixmap.fromImage(qimg)
+                        
+                        # 如果pixmap创建成功且有效
+                        if not pixmap.isNull() and pixmap.width() > 0 and pixmap.height() > 0:
+                            print(f"创建有效的QPixmap: {pixmap.width()}x{pixmap.height()}")
+                            # 创建浮动窗口
+                            self.floating_window = create_floating_window(pixmap=pixmap)
+                            print("成功创建悬浮窗口")
+                        else:
+                            print(f"无法创建有效的QPixmap，大小: {pixmap.width()}x{pixmap.height()}")
+                    except Exception as e:
+                        print(f"图像转换或创建QPixmap过程中出错: {e}")
+                except Exception as e:
+                    print(f"截图过程中出错: {e}")
+        except Exception as e:
+            print(f"浮动截图操作失败: {e}")
+        finally:
+            # 确保关闭所有遮罩窗口，即使过程中发生异常
+            for widget in QApplication.topLevelWidgets():
+                if isinstance(widget, ScreenOverlay):
+                    widget.close()
+            
+            # 如果浮动窗口创建失败，确保重置浮动模式标志
+            if self.floating_window is None:
+                print("浮动窗口创建失败，重置浮动模式标志")
+                self.is_floating = False
+            
+            print("浮动截图操作完成")
+
     def quit_app(self):
         print("退出程序")
         # 注销全局热键
         try:
             hwnd = int(self.event_filter.winId())
             win32gui.UnregisterHotKey(hwnd, HOTKEY_ID)
+            win32gui.UnregisterHotKey(hwnd, FLOATING_HOTKEY_ID)  # 注销Ctrl+W热键
         except:
             pass
         
