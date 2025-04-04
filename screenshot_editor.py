@@ -15,13 +15,15 @@ class ScreenshotEditor(QWidget):
     # 定义一个信号，用于通知截图编辑完成
     editingFinished = pyqtSignal(QPixmap)
     
-    def __init__(self, pixmap=None):
+    def __init__(self, pixmap=None, screen_pos=None):
         super().__init__()
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         
         # 保存原始图像和当前编辑的图像
         self.original_pixmap = pixmap
-        self.current_pixmap = QPixmap(pixmap) if pixmap else QPixmap(800, 600)
+        
+        # 编辑时添加蓝色边框
+        self.current_pixmap = self.addBorderToPixmap(pixmap) if pixmap else QPixmap(800, 600)
         
         # 编辑状态
         self.is_drawing = False
@@ -63,6 +65,9 @@ class ScreenshotEditor(QWidget):
         # 属性面板状态
         self.property_panel_visible = False
         self.property_panel = None
+        
+        # 保存屏幕位置
+        self.screen_pos = screen_pos
         
         self.initUI()
     
@@ -222,7 +227,17 @@ class ScreenshotEditor(QWidget):
         # 启用输入法
         self.setAttribute(Qt.WA_InputMethodEnabled, True)
         
+        # 确保图像已添加边框
+        if self.original_pixmap and self.current_pixmap.width() == self.original_pixmap.width():
+            # 如果当前图像没有边框，添加边框
+            self.current_pixmap = self.addBorderToPixmap(self.original_pixmap)
+        
         self.updateImageLabel()
+        
+        # 如果提供了屏幕位置，则将窗口移动到指定位置
+        if self.screen_pos:
+            self.move(self.screen_pos)
+        
         self.show()
     
     def createToolButton(self, text, icon_color, callback, tooltip=None):
@@ -853,12 +868,20 @@ class ScreenshotEditor(QWidget):
         # 创建一个临时QImage用于处理
         image = self.current_pixmap.toImage()
         
+        # 边框宽度（确保不对边框应用马赛克）
+        border_width = 2
+        
+        # 确保马赛克区域不超出图像边界并且不影响边框
+        safe_rect = rect.intersected(QRect(border_width, border_width, 
+                                        image.width() - 2 * border_width, 
+                                        image.height() - 2 * border_width))
+        
         # 遍历选定区域的每个马赛克块
-        for x in range(rect.left(), rect.right(), size):
-            for y in range(rect.top(), rect.bottom(), size):
+        for x in range(safe_rect.left(), safe_rect.right(), size):
+            for y in range(safe_rect.top(), safe_rect.bottom(), size):
                 # 确保不超出图像边界
-                block_width = min(size, rect.right() - x)
-                block_height = min(size, rect.bottom() - y)
+                block_width = min(size, safe_rect.right() - x)
+                block_height = min(size, safe_rect.bottom() - y)
                 
                 if block_width <= 0 or block_height <= 0:
                     continue
@@ -868,7 +891,7 @@ class ScreenshotEditor(QWidget):
                 for dx in range(block_width):
                     for dy in range(block_height):
                         px, py = x + dx, y + dy
-                        if rect.contains(px, py):
+                        if safe_rect.contains(px, py):
                             pixel = image.pixel(px, py)
                             r += QColor(pixel).red()
                             g += QColor(pixel).green()
@@ -882,7 +905,7 @@ class ScreenshotEditor(QWidget):
                     for dx in range(block_width):
                         for dy in range(block_height):
                             px, py = x + dx, y + dy
-                            if rect.contains(px, py):
+                            if safe_rect.contains(px, py):
                                 image.setPixel(px, py, avg_color.rgb())
         
         # 更新当前pixmap
@@ -894,7 +917,8 @@ class ScreenshotEditor(QWidget):
             self.shapes.pop()
             # 对于马赛克，需要重新加载原始图像并重新应用所有操作
             if any(shape["type"] == "mosaic" for shape in self.shapes):
-                self.current_pixmap = QPixmap(self.original_pixmap)
+                # 加载带边框的原始图像
+                self.current_pixmap = self.addBorderToPixmap(self.original_pixmap)
                 for shape in self.shapes:
                     if shape["type"] == "mosaic":
                         self.applyMosaic(shape)
@@ -904,7 +928,8 @@ class ScreenshotEditor(QWidget):
     def clearAll(self):
         """清除所有绘制内容"""
         self.shapes = []
-        self.current_pixmap = QPixmap(self.original_pixmap)
+        # 重新加载带边框的原始图像
+        self.current_pixmap = self.addBorderToPixmap(self.original_pixmap)
         self.updateImageLabel()
         print("清除所有内容")
     
@@ -914,16 +939,17 @@ class ScreenshotEditor(QWidget):
         if self.is_text_input and self.current_text:
             self.finishTextInput()
         
-        # 获取当前显示的图像,包含所有绘制的内容
-        if self.current_pixmap:
-            # 创建一个临时的pixmap,确保包含所有绘制的内容
-            temp_pixmap = QPixmap(self.current_pixmap)
+        # 获取原始图像并应用编辑内容
+        if self.original_pixmap:
+            # 创建一个临时的pixmap,使用原始图像(无边框)
+            temp_pixmap = QPixmap(self.original_pixmap)
             painter = QPainter(temp_pixmap)
             painter.setRenderHint(QPainter.Antialiasing)
             
             # 绘制所有形状
             for shape in self.shapes:
-                self.drawShape(painter, shape)
+                # 需要调整形状的坐标，去掉边框偏移
+                self.drawShapeWithoutBorder(painter, shape)
                 
             painter.end()
             
@@ -948,86 +974,179 @@ class ScreenshotEditor(QWidget):
             
             # 清空当前绘制内容,准备下次使用
             self.shapes = []
-            self.current_pixmap = QPixmap(self.original_pixmap)
+            # 重新加载带边框的原始图像，因为现在回到了编辑模式
+            self.current_pixmap = self.addBorderToPixmap(self.original_pixmap)
             self.updateImageLabel()
-    
-    def keyPressEvent(self, event):
-        """处理键盘事件"""
-        # 退出编辑器
-        if event.key() == Qt.Key_Escape:
-            # 如果正在输入文本，先取消输入
-            if self.is_text_input:
-                if self.current_text:  # 如果有文本，保存它
-                    self.finishTextInput()
-                else:  # 如果没有文本，退出文本模式
-                    self.is_text_input = False
-                    self.current_text = ""
-                    if self.text_cursor_timer and self.text_cursor_timer.isActive():
-                        self.text_cursor_timer.stop()
-                    self.current_tool = None  # 取消当前工具选择
-                    self.updateImageLabel()
-                return  # 不关闭窗口，只退出文本模式
-            self.close()
-        # 回车完成输入
-        elif self.is_text_input and (event.key() == Qt.Key_Return or event.key() == Qt.Key_Enter):
-            self.finishTextInput()
-        # 退格键删除文本
-        elif self.is_text_input and event.key() == Qt.Key_Backspace:
-            if self.current_text:
-                self.current_text = self.current_text[:-1]
-                self.updateImageLabel()
-        # 处理中文输入法组合键
-        elif event.key() == Qt.Key_Shift or event.key() == Qt.Key_Control or event.key() == Qt.Key_Alt:
-            # 忽略这些修饰键的独立按键事件
-            pass
-        elif self.is_text_input:
-            # 不在这里处理文本，使用inputMethodEvent来处理中文输入
-            pass
-        else:
-            super().keyPressEvent(event)
-    
-    def toggleTextCursor(self):
-        """切换文本光标的可见状态"""
-        if self.is_text_input:
-            self.text_cursor_visible = not self.text_cursor_visible
-            self.updateImageLabel()
-    
-    def finishTextInput(self):
-        """完成文本输入并保存"""
-        if self.is_text_input and self.current_text and self.start_point:
-            # 创建文本形状
-            shape = {
-                "type": "text",
-                "start": self.start_point,
-                "end": self.start_point,
-                "color": self.pen_color,
-                "font": self.text_font,
-                "text": self.current_text
-            }
-            self.shapes.append(shape)
-            print(f"添加文本: {self.current_text}")
-        
-            # 重置文本输入状态但保持工具选中
-            self.current_text = ""
             
-            # 保持is_text_input为True，以便可以继续输入文本
-            # 停止光标闪烁但准备重新开始
-            if self.text_cursor_timer and self.text_cursor_timer.isActive():
-                self.text_cursor_timer.stop()
+    def copyToClipboard(self):
+        """复制当前图像到剪贴板，包含所有编辑内容但不包含边框"""
+        if self.original_pixmap:
+            # 创建一个临时的pixmap，使用原始图像(无边框)
+            temp_pixmap = QPixmap(self.original_pixmap)
+            painter = QPainter(temp_pixmap)
+            painter.setRenderHint(QPainter.Antialiasing)
+            
+            # 绘制所有形状
+            for shape in self.shapes:
+                # 需要调整形状的坐标，去掉边框偏移
+                self.drawShapeWithoutBorder(painter, shape)
+            
+            # 如果正在输入文本，完成文本输入
+            if self.is_text_input and self.current_text:
+                self.finishTextInput()
                 
-            # 更新显示
-            self.updateImageLabel()
+            painter.end()
             
-            # 让光标继续闪烁，准备下一次输入
-            if self.text_cursor_timer:
-                self.text_cursor_timer.start(500)
+            # 将带有所有编辑内容的图像复制到剪贴板
+            QApplication.clipboard().setPixmap(temp_pixmap)
+            print("已复制带有标记的图像到剪贴板")
             
-            return True  # 返回True表示成功添加了文本
-        elif self.is_text_input:
-            # 如果没有文本但正在文本输入模式，只重置当前文本
-            self.current_text = ""
-            return False  # 返回False表示没有添加文本
-    
+            # 发出编辑完成信号但不复制到剪贴板
+            self.editingFinished.emit(temp_pixmap)
+            print("已隐藏编辑界面")
+        
+        # 清空当前绘制内容，准备下次使用
+        self.shapes = []
+        # 重新加载带边框的原始图像，因为现在回到了编辑模式
+        self.current_pixmap = self.addBorderToPixmap(self.original_pixmap)
+        self.updateImageLabel()
+        
+        # 隐藏窗口但不关闭
+        self.hide()
+        
+    def hideEditor(self):
+        """隐藏编辑器，清空内容，准备下次使用"""
+        # 如果正在输入文本，结束文本输入
+        if self.is_text_input and self.current_text:
+            self.finishTextInput()
+        
+        # 获取原始图像并应用编辑内容
+        if self.original_pixmap:
+            # 创建一个临时的pixmap，使用原始图像(无边框)
+            temp_pixmap = QPixmap(self.original_pixmap)
+            painter = QPainter(temp_pixmap)
+            painter.setRenderHint(QPainter.Antialiasing)
+            
+            # 绘制所有形状
+            for shape in self.shapes:
+                # 需要调整形状的坐标，去掉边框偏移
+                self.drawShapeWithoutBorder(painter, shape)
+                
+            painter.end()
+            
+            # 发出编辑完成信号但不复制到剪贴板
+            self.editingFinished.emit(temp_pixmap)
+            print("已隐藏编辑界面")
+        
+        # 清空当前绘制内容，准备下次使用
+        self.shapes = []
+        # 重新加载带边框的原始图像，因为现在回到了编辑模式
+        self.current_pixmap = self.addBorderToPixmap(self.original_pixmap)
+        self.updateImageLabel()
+        
+        # 隐藏窗口但不关闭
+        self.hide()
+        
+    def drawShapeWithoutBorder(self, painter, shape):
+        """绘制形状到无边框图像上，需要调整坐标"""
+        shape_type = shape.get("type")
+        
+        # 确保shape包含所有必要的键
+        if not all(key in shape for key in ["start", "end"]):
+            return
+        
+        # 边框宽度
+        border_width = 2
+        
+        # 获取调整后的起点和终点（去掉边框的偏移）
+        start = QPoint(shape["start"].x() - border_width, shape["start"].y() - border_width)
+        end = QPoint(shape["end"].x() - border_width, shape["end"].y() - border_width)
+        
+        if shape_type in ["rectangle", "circle", "arrow"]:
+            if "color" not in shape or "width" not in shape:
+                return
+            
+            color = shape["color"]
+            width = shape["width"]
+            
+            pen = QPen(color, width)
+            painter.setPen(pen)
+            
+            # 使用NoBrush确保矩形和圆形只绘制边框
+            painter.setBrush(Qt.NoBrush)
+            
+            if shape_type == "rectangle":
+                rect = QRect(start, end)
+                painter.drawRect(rect.normalized())
+            
+            elif shape_type == "circle":
+                rect = QRect(start, end)
+                painter.drawEllipse(rect.normalized())
+            
+            elif shape_type == "arrow":
+                self.drawArrow(painter, start, end, color, width)
+        
+        elif shape_type == "text":
+            # 确保包含所有必要的键
+            if not all(key in shape for key in ["color", "font", "text"]):
+                return
+            
+            color = shape["color"]
+            font = shape["font"]
+            text = shape["text"]
+            painter.setPen(QPen(color))
+            painter.setFont(font)
+            painter.drawText(start, text)
+            
+        # 注意：马赛克效果需要特殊处理，因为已经应用到了pixmap上
+        # 在保存/复制时需要额外处理马赛克区域
+        elif shape_type == "mosaic":
+            # 马赛克已经应用到pixmap上，不需要在这里特别处理
+            # 因为我们是从原始图像重新开始的，所以需要重新应用马赛克
+            if "size" in shape:
+                # 创建一个调整后的马赛克形状（去掉边框偏移）
+                adjusted_shape = {
+                    "type": "mosaic",
+                    "start": start,
+                    "end": end,
+                    "size": shape["size"]
+                }
+                
+                # 获取选定区域
+                rect = QRect(start, end).normalized()
+                size = shape["size"]
+                
+                # 创建一个临时QImage用于处理
+                image = painter.device().toImage()
+                
+                # 遍历选定区域的每个马赛克块
+                for x in range(rect.left(), rect.right(), size):
+                    for y in range(rect.top(), rect.bottom(), size):
+                        # 确保不超出图像边界
+                        block_width = min(size, rect.right() - x)
+                        block_height = min(size, rect.bottom() - y)
+                        
+                        if block_width <= 0 or block_height <= 0:
+                            continue
+                        
+                        # 计算块内平均颜色
+                        r, g, b, count = 0, 0, 0, 0
+                        for dx in range(block_width):
+                            for dy in range(block_height):
+                                px, py = x + dx, y + dy
+                                if rect.contains(px, py) and px >= 0 and py >= 0 and px < image.width() and py < image.height():
+                                    pixel = image.pixel(px, py)
+                                    r += QColor(pixel).red()
+                                    g += QColor(pixel).green()
+                                    b += QColor(pixel).blue()
+                                    count += 1
+                        
+                        if count > 0:
+                            avg_color = QColor(r // count, g // count, b // count)
+                            
+                            # 填充马赛克块
+                            painter.fillRect(QRect(x, y, block_width, block_height), avg_color)
+
     def getShapeAtPosition(self, pos):
         """检查指定位置是否有形状，返回形状索引"""
         # 从后向前检查，以便后绘制的形状优先
@@ -1393,66 +1512,6 @@ class ScreenshotEditor(QWidget):
             # 返回键盘焦点到控件
             self.setFocus()
 
-    def copyToClipboard(self):
-        """复制当前图像到剪贴板，包含所有编辑内容"""
-        if self.current_pixmap:
-            # 创建一个临时的pixmap，确保包含所有绘制的内容
-            temp_pixmap = QPixmap(self.current_pixmap)
-            painter = QPainter(temp_pixmap)
-            painter.setRenderHint(QPainter.Antialiasing)
-            
-            # 绘制所有形状
-            for shape in self.shapes:
-                self.drawShape(painter, shape)
-            
-            # 如果正在输入文本，完成文本输入
-            if self.is_text_input and self.current_text:
-                self.finishTextInput()
-                
-            painter.end()
-            
-            # 将带有所有编辑内容的图像复制到剪贴板
-            QApplication.clipboard().setPixmap(temp_pixmap)
-            print("已复制带有标记的图像到剪贴板")
-            
-            # 发出编辑完成信号但不复制到剪贴板
-            self.editingFinished.emit(temp_pixmap)
-            print("已隐藏编辑界面")
-        
-        # 清空当前绘制内容，准备下次使用
-        self.shapes = []
-        self.current_pixmap = QPixmap(self.original_pixmap)
-        self.updateImageLabel()
-        
-        # 隐藏窗口但不关闭
-        self.hide()
-
-    def getHandleAtPosition(self, pos):
-        """检查指定位置是否有控制点，返回(形状索引, 控制点索引)"""
-        handle_size = 12  # 增大控制点检测范围，使其更容易选中
-        
-        # 从后向前检查，以便后绘制的形状优先
-        for i in range(len(self.shapes)-1, -1, -1):
-            shape = self.shapes[i]
-            if shape["type"] in ["rectangle", "circle"]:
-                rect = QRect(shape["start"], shape["end"]).normalized()
-                
-                # 检查四个角落的控制点
-                # 左上角
-                if abs(pos.x() - rect.left()) <= handle_size and abs(pos.y() - rect.top()) <= handle_size:
-                    return i, 0
-                # 右上角
-                if abs(pos.x() - rect.right()) <= handle_size and abs(pos.y() - rect.top()) <= handle_size:
-                    return i, 1
-                # 左下角
-                if abs(pos.x() - rect.left()) <= handle_size and abs(pos.y() - rect.bottom()) <= handle_size:
-                    return i, 2
-                # 右下角
-                if abs(pos.x() - rect.right()) <= handle_size and abs(pos.y() - rect.bottom()) <= handle_size:
-                    return i, 3
-        
-        return -1, -1
-
     def resizeShape(self, pos):
         """调整当前选中形状的大小"""
         if self.resize_shape_index < 0 or self.resize_shape_index >= len(self.shapes):
@@ -1515,40 +1574,146 @@ class ScreenshotEditor(QWidget):
         self.resize_handle = -1
         self.image_label.setCursor(Qt.ArrowCursor)
 
-    def hideEditor(self):
-        """隐藏编辑器，清空内容，准备下次使用"""
-        # 如果正在输入文本，结束文本输入
-        if self.is_text_input and self.current_text:
-            self.finishTextInput()
-        
-        # 获取当前显示的图像（即使不复制也需要）
-        if self.current_pixmap:
-            # 创建一个临时的pixmap，确保包含所有绘制的内容
-            temp_pixmap = QPixmap(self.current_pixmap)
-            painter = QPainter(temp_pixmap)
-            painter.setRenderHint(QPainter.Antialiasing)
+    def addBorderToPixmap(self, pixmap):
+        """为pixmap添加2px的蓝色边框"""
+        if not pixmap:
+            return QPixmap()
             
-            # 绘制所有形状
-            for shape in self.shapes:
-                self.drawShape(painter, shape)
-                
-            painter.end()
-            
-            # 发出编辑完成信号但不复制到剪贴板
-            self.editingFinished.emit(temp_pixmap)
-            print("已隐藏编辑界面")
+        # 创建一个比原图大4px的pixmap(左右上下各增加2px)
+        border_width = 2  # 边框宽度
+        width = pixmap.width() + border_width * 2
+        height = pixmap.height() + border_width * 2
         
-        # 清空当前绘制内容，准备下次使用
-        self.shapes = []
-        self.current_pixmap = QPixmap(self.original_pixmap)
-        self.updateImageLabel()
+        # 创建新的pixmap并填充透明背景
+        bordered_pixmap = QPixmap(width, height)
+        bordered_pixmap.fill(Qt.transparent)
         
-        # 隐藏窗口但不关闭
-        self.hide()
+        # 创建画家
+        painter = QPainter(bordered_pixmap)
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        # 绘制蓝色边框
+        border_color = QColor(0, 120, 215)  # 蓝色
+        painter.setPen(QPen(border_color, border_width))
+        
+        # 绘制边框矩形，确保边框完全在pixmap内部
+        border_rect = QRect(border_width//2, border_width//2, 
+                          width - border_width, height - border_width)
+        painter.drawRect(border_rect)
+        
+        # 在中心绘制原始图像
+        painter.drawPixmap(border_width, border_width, pixmap)
+        
+        painter.end()
+        
+        return bordered_pixmap
 
-def edit_screenshot(pixmap):
+    def keyPressEvent(self, event):
+        """处理键盘事件"""
+        # 退出编辑器
+        if event.key() == Qt.Key_Escape:
+            # 如果正在输入文本，先取消输入
+            if self.is_text_input:
+                if self.current_text:  # 如果有文本，保存它
+                    self.finishTextInput()
+                else:  # 如果没有文本，退出文本模式
+                    self.is_text_input = False
+                    self.current_text = ""
+                    if self.text_cursor_timer and self.text_cursor_timer.isActive():
+                        self.text_cursor_timer.stop()
+                    self.current_tool = None  # 取消当前工具选择
+                    self.updateImageLabel()
+                return  # 不关闭窗口，只退出文本模式
+            self.close()
+        # 回车完成输入
+        elif self.is_text_input and (event.key() == Qt.Key_Return or event.key() == Qt.Key_Enter):
+            self.finishTextInput()
+        # 退格键删除文本
+        elif self.is_text_input and event.key() == Qt.Key_Backspace:
+            if self.current_text:
+                self.current_text = self.current_text[:-1]
+                self.updateImageLabel()
+        # 处理中文输入法组合键
+        elif event.key() == Qt.Key_Shift or event.key() == Qt.Key_Control or event.key() == Qt.Key_Alt:
+            # 忽略这些修饰键的独立按键事件
+            pass
+        elif self.is_text_input:
+            # 不在这里处理文本，使用inputMethodEvent来处理中文输入
+            pass
+        else:
+            super().keyPressEvent(event)
+    
+    def toggleTextCursor(self):
+        """切换文本光标的可见状态"""
+        if self.is_text_input:
+            self.text_cursor_visible = not self.text_cursor_visible
+            self.updateImageLabel()
+    
+    def finishTextInput(self):
+        """完成文本输入并保存"""
+        if self.is_text_input and self.current_text and self.start_point:
+            # 创建文本形状
+            shape = {
+                "type": "text",
+                "start": self.start_point,
+                "end": self.start_point,
+                "color": self.pen_color,
+                "font": self.text_font,
+                "text": self.current_text
+            }
+            self.shapes.append(shape)
+            print(f"添加文本: {self.current_text}")
+        
+            # 重置文本输入状态但保持工具选中
+            self.current_text = ""
+            
+            # 保持is_text_input为True，以便可以继续输入文本
+            # 停止光标闪烁但准备重新开始
+            if self.text_cursor_timer and self.text_cursor_timer.isActive():
+                self.text_cursor_timer.stop()
+                
+            # 更新显示
+            self.updateImageLabel()
+            
+            # 让光标继续闪烁，准备下一次输入
+            if self.text_cursor_timer:
+                self.text_cursor_timer.start(500)
+            
+            return True  # 返回True表示成功添加了文本
+        elif self.is_text_input:
+            # 如果没有文本但正在文本输入模式，只重置当前文本
+            self.current_text = ""
+            return False  # 返回False表示没有添加文本
+            
+    def getHandleAtPosition(self, pos):
+        """检查指定位置是否有控制点，返回(形状索引, 控制点索引)"""
+        handle_size = 12  # 增大控制点检测范围，使其更容易选中
+        
+        # 从后向前检查，以便后绘制的形状优先
+        for i in range(len(self.shapes)-1, -1, -1):
+            shape = self.shapes[i]
+            if shape["type"] in ["rectangle", "circle"]:
+                rect = QRect(shape["start"], shape["end"]).normalized()
+                
+                # 检查四个角落的控制点
+                # 左上角
+                if abs(pos.x() - rect.left()) <= handle_size and abs(pos.y() - rect.top()) <= handle_size:
+                    return i, 0
+                # 右上角
+                if abs(pos.x() - rect.right()) <= handle_size and abs(pos.y() - rect.top()) <= handle_size:
+                    return i, 1
+                # 左下角
+                if abs(pos.x() - rect.left()) <= handle_size and abs(pos.y() - rect.bottom()) <= handle_size:
+                    return i, 2
+                # 右下角
+                if abs(pos.x() - rect.right()) <= handle_size and abs(pos.y() - rect.bottom()) <= handle_size:
+                    return i, 3
+        
+        return -1, -1
+
+def edit_screenshot(pixmap, screen_pos=None):
     """创建并显示截图编辑器"""
-    editor = ScreenshotEditor(pixmap)
+    editor = ScreenshotEditor(pixmap, screen_pos)
     return editor
 
 if __name__ == "__main__":

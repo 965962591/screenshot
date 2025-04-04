@@ -806,8 +806,9 @@ class ScreenCaptureApp(QWidget):
                     if not pixmap.isNull() and pixmap.width() > 0 and pixmap.height() > 0:
                         print(f"创建有效的QPixmap: {pixmap.width()}x{pixmap.height()}")
                         
-                        # 创建并显示编辑器
-                        self.screenshot_editor = edit_screenshot(pixmap)
+                        # 创建并显示编辑器，传递截图的原始位置
+                        screen_pos = QPoint(monitor['left'], monitor['top'])
+                        self.screenshot_editor = edit_screenshot(pixmap, screen_pos)
                         
                         # 连接编辑完成信号
                         self.screenshot_editor.editingFinished.connect(self.on_screenshot_edited)
