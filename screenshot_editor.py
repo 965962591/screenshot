@@ -4,6 +4,7 @@ from PyQt5.QtGui import *
 import os
 import sys
 import math
+import datetime
 
 class ScreenshotEditor(QWidget):
     """用于编辑截图的窗口，提供各种编辑工具"""
@@ -1048,10 +1049,12 @@ class ScreenshotEditor(QWidget):
             painter.end()
             
             # 打开文件保存对话框
+            timestamp = datetime.datetime.now().strftime('%Y-%m-%d-%H%M%S')
+            default_filename = os.path.expanduser(f"~/Pictures/{timestamp}.png")
             file_path, _ = QFileDialog.getSaveFileName(
                 self,
                 "保存截图",
-                os.path.expanduser("~/Pictures/screenshot.png"),
+                default_filename,
                 "Images (*.png *.jpg *.jpeg *.bmp)"
             )
             

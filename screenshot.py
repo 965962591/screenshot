@@ -25,8 +25,7 @@ def print_help():
     print("7. 按 H 键显示此帮助信息")
     print("8. 按 C 键取消当前选择")
     print("9. 右键点击系统托盘图标可以退出程序")
-    print("10. 按下 Ctrl+W 开始浮动截图，截图内容将显示在可拖动窗口中")
-    print("11. 按下 Ctrl+R 开始编辑截图，截图后可以添加矩形、文字和马赛克等")
+    print("10. 按下 Ctrl+W 开始编辑截图，截图后可以添加矩形、文字和马赛克等")
     print("====================")
 
 class MouseTracker(QWidget):
@@ -352,7 +351,6 @@ class ScreenOverlay(QWidget):
 
 # 定义全局热键ID
 HOTKEY_ID = 1
-FLOATING_HOTKEY_ID = 2  # 新增的热键ID
 EDIT_HOTKEY_ID = 3  # 用于编辑截图的热键ID
 
 # 为WM_HOTKEY消息设置窗口消息过滤器
@@ -482,17 +480,11 @@ class ScreenCaptureApp(QWidget):
         else:
             print("已注册全局热键: Ctrl+Q (用于开始截图)")
         
-        # 注册Ctrl+W全局热键
-        if not win32gui.RegisterHotKey(hwnd, FLOATING_HOTKEY_ID, win32con.MOD_CONTROL, ord('W')):
+        # 注册Ctrl+R全局热键
+        if not win32gui.RegisterHotKey(hwnd, EDIT_HOTKEY_ID, win32con.MOD_CONTROL, ord('W')):
             print("注册全局热键Ctrl+W失败")
         else:
             print("已注册全局热键: Ctrl+W (用于浮动截图)")
-        
-        # 注册Ctrl+R全局热键
-        if not win32gui.RegisterHotKey(hwnd, EDIT_HOTKEY_ID, win32con.MOD_CONTROL, ord('R')):
-            print("注册全局热键Ctrl+R失败")
-        else:
-            print("已注册全局热键: Ctrl+R (用于编辑截图)")
     
     def update_active_screen(self):
         # 此方法仅在已经开始截图时使用，用于在截图过程中切换屏幕
@@ -658,92 +650,6 @@ class ScreenCaptureApp(QWidget):
         print("开始浮动截图操作...")
         self.is_floating = True  # 标记为浮动截图模式
         self.start_screenshot()
-
-    # def capture_floating_screenshot(self, selected_rect, screen_info):
-    #     """执行浮动截图"""
-    #     try:
-    #         print("开始执行浮动截图...")
-    #         # 隐藏所有窗口以便截图
-    #         for widget in QApplication.topLevelWidgets():
-    #             if isinstance(widget, ScreenOverlay):
-    #                 widget.hide()
-    #         QApplication.processEvents()
-            
-    #         # 使用mss进行截图
-    #         with mss.mss() as sct:
-    #             # 计算截图区域
-    #             monitor = {
-    #                 "left": selected_rect.left() + screen_info.left(),
-    #                 "top": selected_rect.top() + screen_info.top(),
-    #                 "width": selected_rect.width(),
-    #                 "height": selected_rect.height()
-    #             }
-                
-    #             print(f"截图区域: 左上角({monitor['left']}, {monitor['top']}), 宽x高({monitor['width']}x{monitor['height']})")
-                
-    #             try:
-    #                 # 抓取屏幕
-    #                 screenshot = sct.grab(monitor)
-                    
-    #                 # 确保截图数据有效
-    #                 if screenshot.size[0] <= 0 or screenshot.size[1] <= 0:
-    #                     print(f"截图大小无效: {screenshot.size}")
-    #                     return
-                    
-    #                 print(f"成功抓取屏幕，图像大小: {screenshot.size[0]}x{screenshot.size[1]}")
-                    
-    #                 try:
-    #                     # 转换截图为PIL图像
-    #                     img = Image.frombytes("RGB", screenshot.size, screenshot.rgb)
-                        
-    #                     # 临时保存文件，确保图像数据正确
-    #                     if not os.path.exists("output"):
-    #                         os.makedirs("output")
-                        
-    #                     # 生成临时文件名
-    #                     import datetime
-    #                     timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-    #                     temp_filename = f"output/floating_{timestamp}.png"
-    #                     img.save(temp_filename)
-    #                     print(f"临时文件已保存: {temp_filename}")
-                        
-    #                     # 使用保存的文件创建QPixmap (更可靠的方法)
-    #                     pixmap = QPixmap(temp_filename)
-                        
-    #                     # 如果直接从文件创建失败，尝试使用QImage作为中介
-    #                     if pixmap.isNull():
-    #                         print("使用临时文件创建QPixmap失败，尝试使用QImage...")
-    #                         # 从保存的文件加载QImage
-    #                         qimg = QImage(temp_filename)
-    #                         if not qimg.isNull():
-    #                             pixmap = QPixmap.fromImage(qimg)
-                        
-    #                     # # 如果pixmap创建成功且有效
-    #                     # if not pixmap.isNull() and pixmap.width() > 0 and pixmap.height() > 0:
-    #                     #     print(f"创建有效的QPixmap: {pixmap.width()}x{pixmap.height()}")
-    #                     #     # 创建浮动窗口
-    #                     #     self.floating_window = create_floating_window(pixmap=pixmap)
-    #                     #     print("成功创建悬浮窗口")
-    #                     # else:
-    #                     #     print(f"无法创建有效的QPixmap，大小: {pixmap.width()}x{pixmap.height()}")
-    #                 except Exception as e:
-    #                     print(f"图像转换或创建QPixmap过程中出错: {e}")
-    #             except Exception as e:
-    #                 print(f"截图过程中出错: {e}")
-    #     except Exception as e:
-    #         print(f"浮动截图操作失败: {e}")
-    #     finally:
-    #         # 确保关闭所有遮罩窗口，即使过程中发生异常
-    #         for widget in QApplication.topLevelWidgets():
-    #             if isinstance(widget, ScreenOverlay):
-    #                 widget.close()
-            
-    #         # 如果浮动窗口创建失败，确保重置浮动模式标志
-    #         if self.floating_window is None:
-    #             print("浮动窗口创建失败，重置浮动模式标志")
-    #             self.is_floating = False
-            
-    #         print("浮动截图操作完成")
 
     def start_edit_screenshot(self):
         """开始一个用于编辑的截图操作"""
