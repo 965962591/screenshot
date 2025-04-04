@@ -7,6 +7,7 @@ from PyQt5.QtGui import QPixmap, QImage, QPainter, QPen, QColor, QFont, QIcon, Q
 
 import os
 import sys
+import math
 
 class ScreenshotEditor(QWidget):
     """用于编辑截图的窗口，提供各种编辑工具"""
@@ -77,6 +78,10 @@ class ScreenshotEditor(QWidget):
         self.image_label.setAlignment(Qt.AlignCenter)
         self.image_label.setMouseTracking(True)
         self.image_label.installEventFilter(self)
+        
+        # 设置图像标签的尺寸策略，确保图像不会被拉伸
+        self.image_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.image_label.setScaledContents(False)
         
         # 创建工具栏
         self.toolbar = QToolBar()
@@ -732,6 +737,8 @@ class ScreenshotEditor(QWidget):
         
         # 更新图像标签
         self.image_label.setPixmap(temp_pixmap)
+        # 确保标签尺寸与pixmap一致，避免拉伸问题
+        self.image_label.setFixedSize(temp_pixmap.size())
     
     def drawShape(self, painter, shape):
         """根据形状类型绘制对应图形"""
@@ -788,8 +795,8 @@ class ScreenshotEditor(QWidget):
         painter.drawLine(start, end)
         
         # 计算箭头
-        arrow_size = 15  # 箭头大小
-        angle = 30  # 箭头角度（度）
+        arrow_size = max(15, width * 5)  # 箭头大小与线条粗细成比例
+        angle = 20  # 更尖锐的箭头角度（度）
         
         # 计算线段角度
         line_length = ((end.x() - start.x())**2 + (end.y() - start.y())**2)**0.5
@@ -800,19 +807,32 @@ class ScreenshotEditor(QWidget):
         dx = (end.x() - start.x()) / line_length
         dy = (end.y() - start.y()) / line_length
         
-        # 计算箭头两边的点
+        # 计算箭头两边的点（使用正确的三角函数）
         angle_rad = angle * 3.14159 / 180.0  # 转换为弧度
         
         # 计算箭头两翼的点
-        x1 = end.x() - arrow_size * (dx * 3.14159/180.0 + dy * 3.14159/180.0)
-        y1 = end.y() - arrow_size * (dy * 3.14159/180.0 - dx * 3.14159/180.0)
+        x1 = end.x() - arrow_size * (dx * math.cos(angle_rad) + dy * math.sin(angle_rad))
+        y1 = end.y() - arrow_size * (dy * math.cos(angle_rad) - dx * math.sin(angle_rad))
         
-        x2 = end.x() - arrow_size * (dx * 3.14159/180.0 - dy * 3.14159/180.0)
-        y2 = end.y() - arrow_size * (dy * 3.14159/180.0 + dx * 3.14159/180.0)
+        x2 = end.x() - arrow_size * (dx * math.cos(angle_rad) - dy * math.sin(angle_rad))
+        y2 = end.y() - arrow_size * (dy * math.cos(angle_rad) + dx * math.sin(angle_rad))
         
-        # 绘制箭头
-        painter.drawLine(end, QPoint(int(x1), int(y1)))
-        painter.drawLine(end, QPoint(int(x2), int(y2)))
+        # 创建填充的箭头
+        points = [end, QPoint(int(x1), int(y1)), QPoint(int(x2), int(y2))]
+        
+        # 保存当前画笔和画刷
+        old_pen = painter.pen()
+        old_brush = painter.brush()
+        
+        # 设置填充色与线条颜色相同
+        painter.setBrush(QBrush(color))
+        
+        # 绘制填充的箭头
+        painter.drawPolygon(points)
+        
+        # 恢复原来的画笔和画刷
+        painter.setPen(old_pen)
+        painter.setBrush(old_brush)
     
     def applyMosaic(self, shape):
         """应用马赛克效果到图像"""
@@ -1178,9 +1198,9 @@ class ScreenshotEditor(QWidget):
                 item.widget().deleteLater()
         
         # 根据工具类型添加不同的控件
-        if tool_type == "rectangle" or tool_type == "circle":
+        if tool_type in ["rectangle", "circle", "arrow"]:  # 添加箭头到共享样式工具
             # 添加边框颜色选择器
-            self.property_layout.addWidget(QLabel("边框:"))
+            self.property_layout.addWidget(QLabel("颜色:"))
             
             # 颜色预设面板
             color_preset_layout = QHBoxLayout()
