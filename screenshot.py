@@ -4,16 +4,15 @@ from PyQt5.QtWidgets import QApplication, QWidget, QMainWindow, QLabel, QSystemT
 from PyQt5.QtCore import Qt, QRect, QPoint, QTimer
 from PyQt5.QtGui import QPainter, QColor, QPen, QScreen, QCursor, QPixmap, QImage, QIcon, QKeySequence
 import mss
-import numpy as np
+# import numpy as np
 from PIL import Image
-import subprocess
+# import subprocess
 import win32con
 import win32gui
 import ctypes
-from ctypes import wintypes
+from ctypes import wintypes  # 确保 wintypes 可以正确导入
 from floating_window import create_floating_window
 from screenshot_editor import edit_screenshot
-
 def print_help():
     """打印帮助信息"""
     print("=== 多屏幕截图工具 ===")

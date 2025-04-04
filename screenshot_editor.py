@@ -1,6 +1,6 @@
 from PyQt5.QtWidgets import (QWidget, QApplication, QLabel, QVBoxLayout, QHBoxLayout,
                            QPushButton, QToolBar, QAction, QColorDialog, QFontDialog,
-                           QSizePolicy, QInputDialog, QLineEdit, QSlider)
+                           QSizePolicy, QInputDialog, QLineEdit, QSlider, QComboBox, QCheckBox)
 from PyQt5.QtCore import Qt, QPoint, QRect, QSize, pyqtSignal, QTimer
 from PyQt5.QtGui import QPixmap, QImage, QPainter, QPen, QColor, QFont, QIcon, QBrush, QCursor, QFontMetrics
 
@@ -32,6 +32,7 @@ class ScreenshotEditor(QWidget):
         self.pen_width = 2
         self.text_font = QFont("SimSun", 12)  # 使用宋体作为默认字体支持中文
         self.mosaic_size = 10  # 马赛克大小
+        self.text_bold = False  # 是否使用粗体
         
         # 绘制的对象
         self.shapes = []  # 存储所有绘制的形状
@@ -49,11 +50,17 @@ class ScreenshotEditor(QWidget):
         self.moving_shape_index = -1  # 当前移动的形状索引
         self.move_start_pos = QPoint()  # 移动开始位置
         
-        # 添加可移动的ROI矩形标记工具
-        self.is_roi_tool = False  # 是否使用ROI工具
+        # 调整大小相关属性
+        self.is_resizing = False  # 是否正在调整大小
+        self.resize_shape_index = -1  # 当前调整大小的形状索引
+        self.resize_handle = -1  # 当前调整的控制点，0-左上，1-右上，2-左下，3-右下
         
         # 启用输入法支持
         self.setAttribute(Qt.WA_InputMethodEnabled, True)
+        
+        # 属性面板状态
+        self.property_panel_visible = False
+        self.property_panel = None
         
         self.initUI()
     
@@ -106,8 +113,71 @@ class ScreenshotEditor(QWidget):
         # 添加工具按钮
         self.addToolbarButtons()
         
+        # 创建属性面板（初始隐藏）
+        self.property_panel = QWidget()
+        self.property_panel.setStyleSheet("""
+            QWidget {
+                background-color: #3D3D3D;
+                color: white;
+                border: none;
+            }
+            QLabel {
+                color: white;
+            }
+            QSlider {
+                height: 20px;
+            }
+            QSlider::groove:horizontal {
+                border: 1px solid #999999;
+                height: 8px;
+                background: #4D4D4D;
+                margin: 2px 0;
+                border-radius: 4px;
+            }
+            QSlider::handle:horizontal {
+                background: #CCCCCC;
+                border: 1px solid #5C5C5C;
+                width: 18px;
+                margin: -2px 0;
+                border-radius: 3px;
+            }
+            QPushButton {
+                background-color: #5A5A5A;
+                border: none;
+                border-radius: 3px;
+                padding: 5px;
+                color: white;
+            }
+            QPushButton:hover {
+                background-color: #6A6A6A;
+            }
+            QPushButton:pressed {
+                background-color: #7A7A7A;
+            }
+            QComboBox {
+                background-color: #5A5A5A;
+                border: none;
+                border-radius: 3px;
+                padding: 5px;
+                color: white;
+            }
+            QComboBox::drop-down {
+                border-color: transparent;
+            }
+            QCheckBox {
+                color: white;
+            }
+        """)
+        self.property_panel.setFixedHeight(50)
+        self.property_panel.hide()
+        
+        # 准备属性面板布局
+        self.property_layout = QHBoxLayout(self.property_panel)
+        self.property_layout.setContentsMargins(10, 5, 10, 5)
+        
         # 将组件添加到布局
         main_layout.addWidget(self.image_label)
+        main_layout.addWidget(self.property_panel)
         main_layout.addWidget(self.toolbar)
         
         self.setLayout(main_layout)
@@ -222,6 +292,21 @@ class ScreenshotEditor(QWidget):
         clear_action.triggered.connect(self.clearAll)
         self.toolbar.addAction(clear_action)
         
+        # 添加复制到剪贴板按钮 - 更加明显
+        copy_action = QAction("复制", self)
+        copy_pixmap = QPixmap(24, 24)
+        copy_pixmap.fill(Qt.transparent)
+        copy_painter = QPainter(copy_pixmap)
+        # 用更醒目的颜色绘制
+        copy_painter.setPen(QPen(QColor(255, 215, 0), 2))  # 金色
+        copy_painter.drawRect(8, 4, 12, 12)
+        copy_painter.drawRect(4, 8, 12, 12)
+        copy_painter.end()
+        copy_action.setIcon(QIcon(copy_pixmap))
+        copy_action.setToolTip("复制到剪贴板并关闭")
+        copy_action.triggered.connect(self.copyToClipboard)
+        self.toolbar.addAction(copy_action)
+        
         # 添加分隔符
         self.toolbar.addSeparator()
         
@@ -264,6 +349,9 @@ class ScreenshotEditor(QWidget):
         self.current_tool = tool_name
         print(f"已选择工具: {tool_name}")
         
+        # 显示对应的属性面板
+        self.showPropertyPanel(tool_name)
+        
         # 根据工具类型设置特定属性
         if tool_name == "text_input":
             self.is_text_input = True
@@ -276,29 +364,30 @@ class ScreenshotEditor(QWidget):
             if not self.text_cursor_timer.isActive():
                 self.text_cursor_timer.start(500)
         
-        # 如果选择了马赛克工具，显示大小选择器
+        # 如果选择了马赛克工具，不再显示对话框，改为使用属性面板控制
         elif tool_name == "mosaic":
-            # 让用户选择马赛克大小
-            mosaic_size, ok = QInputDialog.getInt(
-                self, "马赛克大小", "请选择马赛克块大小 (像素):", 
-                self.mosaic_size, 2, 50, 1
-            )
-            if ok:
-                self.mosaic_size = mosaic_size
-                print(f"设置马赛克大小: {mosaic_size}")
+            pass  # 已在属性面板中处理
     
     def setColor(self):
         """设置画笔颜色"""
         color = QColorDialog.getColor(self.pen_color, self)
         if color.isValid():
             self.pen_color = color
-            
-            # 更新颜色按钮图标
-            color_pixmap = QPixmap(24, 24)
-            color_pixmap.fill(self.pen_color)
-            self.color_action.setIcon(QIcon(color_pixmap))
-            
             print(f"设置颜色: {color.name()}")
+    
+    def setColorDirect(self, color):
+        """直接设置预设颜色"""
+        if color:
+            self.pen_color = QColor(color)
+            print(f"设置预设颜色: {color.name()}")
+            
+            # 如果是在文本输入模式下，确保更新后仍然保持文本输入状态
+            if self.is_text_input:
+                # 强制更新显示
+                self.updateImageLabel()
+                # 确保文本光标仍然可见
+                if self.text_cursor_timer and not self.text_cursor_timer.isActive():
+                    self.text_cursor_timer.start(500)
     
     def setFont(self):
         """设置文本字体"""
@@ -306,6 +395,14 @@ class ScreenshotEditor(QWidget):
         if ok:
             self.text_font = font
             print(f"设置字体: {font.family()} {font.pointSize()}")
+            
+            # 如果是在文本输入模式下，确保更新后仍然保持文本输入状态
+            if self.is_text_input:
+                # 强制更新显示
+                self.updateImageLabel()
+                # 确保文本光标仍然可见
+                if self.text_cursor_timer and not self.text_cursor_timer.isActive():
+                    self.text_cursor_timer.start(500)
     
     def eventFilter(self, source, event):
         """事件过滤器，用于处理鼠标事件"""
@@ -320,10 +417,21 @@ class ScreenshotEditor(QWidget):
             
             # 处理鼠标按下事件
             if event.type() == event.MouseButtonPress and event.button() == Qt.LeftButton:
+                # 检查是否点击了控制点（用于调整大小）
+                shape_index, handle_index = self.getHandleAtPosition(event.pos())
+                if shape_index >= 0 and handle_index >= 0:
+                    print(f"开始调整形状大小 - 形状索引: {shape_index}, 控制点: {handle_index}")
+                    # 开始调整大小
+                    self.is_resizing = True
+                    self.resize_shape_index = shape_index
+                    self.resize_handle = handle_index
+                    return True
+                
                 # 检查是否点击了已有形状
                 shape_index = self.getShapeAtPosition(event.pos())
                 if shape_index >= 0:
                     # 开始移动形状，所有形状都可以移动
+                    print(f"开始移动形状 - 形状索引: {shape_index}")
                     self.is_moving_shape = True
                     self.moving_shape_index = shape_index
                     self.move_start_pos = event.pos()
@@ -335,18 +443,38 @@ class ScreenshotEditor(QWidget):
                 
             # 处理鼠标移动事件
             elif event.type() == event.MouseMove:
-                if self.is_moving_shape and self.moving_shape_index >= 0:
-                    # 移动形状
+                # 更新鼠标指针样式
+                shape_index, handle_index = self.getHandleAtPosition(event.pos())
+                if shape_index >= 0 and handle_index >= 0:
+                    if handle_index in [0, 3]:  # 左上角或右下角
+                        self.image_label.setCursor(Qt.SizeFDiagCursor)
+                    else:  # 右上角或左下角
+                        self.image_label.setCursor(Qt.SizeBDiagCursor)
+                elif self.getShapeAtPosition(event.pos()) >= 0:
+                    self.image_label.setCursor(Qt.SizeAllCursor)
+                else:
+                    self.image_label.setCursor(Qt.ArrowCursor)
+                
+                # 处理调整大小
+                if self.is_resizing and self.resize_shape_index >= 0:
+                    self.resizeShape(event.pos())
+                    return True
+                # 处理移动形状
+                elif self.is_moving_shape and self.moving_shape_index >= 0:
                     self.moveShape(event.pos())
                     return True
+                # 处理绘制
                 elif self.is_drawing:
-                    # 正常绘制
                     self.drawing(event.pos())
                     return True
-                
+            
             # 处理鼠标释放事件
             elif event.type() == event.MouseButtonRelease and event.button() == Qt.LeftButton:
-                if self.is_moving_shape:
+                if self.is_resizing:
+                    # 完成调整大小
+                    self.finishResizeShape()
+                    return True
+                elif self.is_moving_shape:
                     # 完成移动形状
                     self.finishMoveShape()
                     return True
@@ -767,10 +895,42 @@ class ScreenshotEditor(QWidget):
         # 从后向前检查，以便后绘制的形状优先
         for i in range(len(self.shapes)-1, -1, -1):
             shape = self.shapes[i]
-            if shape["type"] in ["rectangle", "roi", "circle"]:
+            if shape["type"] == "rectangle":
                 rect = QRect(shape["start"], shape["end"]).normalized()
-                if rect.contains(pos):
+                # 检查是否在边框附近（边框宽度的2倍范围内）
+                border_width = shape.get("width", 2) * 2
+                outer_rect = rect.adjusted(-border_width, -border_width, border_width, border_width)
+                inner_rect = rect.adjusted(border_width, border_width, -border_width, -border_width)
+                
+                # 如果在边框区域或内部区域
+                if outer_rect.contains(pos) and not inner_rect.contains(pos):
                     return i
+                # 如果是小矩形，整个区域都可以点击
+                if rect.width() < 20 or rect.height() < 20:
+                    if rect.contains(pos):
+                        return i
+                
+            elif shape["type"] == "circle":
+                rect = QRect(shape["start"], shape["end"]).normalized()
+                center = rect.center()
+                rx = rect.width() / 2
+                ry = rect.height() / 2
+                
+                # 计算点到椭圆的距离，近似值
+                if rx > 0 and ry > 0:
+                    dx = (pos.x() - center.x()) / rx
+                    dy = (pos.y() - center.y()) / ry
+                    distance = dx*dx + dy*dy
+                    
+                    # 在椭圆边框附近（边框宽度的2倍范围内）
+                    border_width = shape.get("width", 2) * 2 / min(rx, ry)
+                    if abs(distance - 1.0) < border_width:
+                        return i
+                    # 如果是小圆形，整个区域都可以点击
+                    if rect.width() < 20 or rect.height() < 20:
+                        if distance <= 1.0:
+                            return i
+            
             elif shape["type"] == "text" and "text" in shape:
                 # 为文本创建一个小的检测区域
                 font_metrics = QFontMetrics(shape["font"])
@@ -812,10 +972,10 @@ class ScreenshotEditor(QWidget):
 
     def drawControlPoints(self, painter, rect, color):
         """绘制形状的控制点"""
-        size = 6
-        pen = QPen(color, 1)
+        size = 10  # 增大控制点尺寸
+        pen = QPen(color, 2)  # 增加边框宽度
         painter.setPen(pen)
-        painter.setBrush(QBrush(color))
+        painter.setBrush(QBrush(Qt.white))  # 使用白色填充，更容易看到
         
         # 左上角
         painter.drawRect(rect.left() - size // 2, rect.top() - size // 2, size, size)
@@ -900,6 +1060,303 @@ class ScreenshotEditor(QWidget):
         
         # 更新图像标签
         self.image_label.setPixmap(temp_pixmap)
+
+    def showPropertyPanel(self, tool_type):
+        """根据工具类型显示不同的属性面板"""
+        # 清除旧的属性面板内容
+        while self.property_layout.count():
+            item = self.property_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        
+        # 根据工具类型添加不同的控件
+        if tool_type == "rectangle" or tool_type == "circle":
+            # 添加边框颜色选择器
+            self.property_layout.addWidget(QLabel("边框:"))
+            
+            # 颜色预设面板
+            color_preset_layout = QHBoxLayout()
+            color_preset_layout.setSpacing(2)
+            
+            # 常用颜色预设 - 使用 QColor 对象而不是 Qt.GlobalColor
+            colors = [QColor(255, 0, 0), QColor(0, 0, 255), QColor(0, 255, 0), 
+                      QColor(255, 255, 0), QColor(0, 0, 0), QColor(255, 255, 255)]
+            
+            for c in colors:
+                color_btn = QPushButton()
+                color_btn.setFixedSize(20, 20)
+                color_btn.setStyleSheet(f"background-color: {c.name()}; border: 1px solid #888888;")
+                color_btn.clicked.connect(lambda checked, color=c: self.setColorDirect(color))
+                color_preset_layout.addWidget(color_btn)
+            
+            # 自定义颜色按钮
+            custom_color_btn = QPushButton("自定义...")
+            custom_color_btn.setFixedWidth(60)
+            custom_color_btn.clicked.connect(self.setColor)
+            color_preset_layout.addWidget(custom_color_btn)
+            
+            color_widget = QWidget()
+            color_widget.setLayout(color_preset_layout)
+            self.property_layout.addWidget(color_widget)
+            
+            # 添加边框粗细滑块
+            self.property_layout.addWidget(QLabel("粗细:"))
+            width_slider = QSlider(Qt.Horizontal)
+            width_slider.setMinimum(1)
+            width_slider.setMaximum(10)
+            width_slider.setValue(self.pen_width)
+            width_slider.setFixedWidth(100)
+            width_slider.valueChanged.connect(self.setPenWidth)
+            
+            # 显示当前值的标签
+            width_label = QLabel(f"{self.pen_width}px")
+            width_label.setFixedWidth(30)
+            width_slider.valueChanged.connect(lambda v: width_label.setText(f"{v}px"))
+            
+            width_layout = QHBoxLayout()
+            width_layout.addWidget(width_slider)
+            width_layout.addWidget(width_label)
+            
+            width_widget = QWidget()
+            width_widget.setLayout(width_layout)
+            self.property_layout.addWidget(width_widget)
+            
+        elif tool_type == "text_input":
+            # 添加文本颜色选择器
+            self.property_layout.addWidget(QLabel("文本颜色:"))
+            
+            # 颜色预设面板
+            color_preset_layout = QHBoxLayout()
+            color_preset_layout.setSpacing(2)
+            
+            # 常用颜色预设 - 使用 QColor 对象而不是 Qt.GlobalColor
+            colors = [QColor(255, 0, 0), QColor(0, 0, 255), QColor(0, 255, 0), 
+                      QColor(255, 255, 0), QColor(0, 0, 0), QColor(255, 255, 255)]
+            
+            for c in colors:
+                color_btn = QPushButton()
+                color_btn.setFixedSize(20, 20)
+                color_btn.setStyleSheet(f"background-color: {c.name()}; border: 1px solid #888888;")
+                color_btn.clicked.connect(lambda checked, color=c: self.setColorDirect(color))
+                color_preset_layout.addWidget(color_btn)
+            
+            # 自定义颜色按钮
+            custom_color_btn = QPushButton("自定义...")
+            custom_color_btn.setFixedWidth(60)
+            custom_color_btn.clicked.connect(self.setColor)
+            color_preset_layout.addWidget(custom_color_btn)
+            
+            color_widget = QWidget()
+            color_widget.setLayout(color_preset_layout)
+            self.property_layout.addWidget(color_widget)
+            
+            # 添加字体大小选择器
+            self.property_layout.addWidget(QLabel("字号:"))
+            font_size_combo = QComboBox()
+            font_sizes = [8, 9, 10, 11, 12, 14, 16, 18, 20, 22, 24, 26, 28, 36, 48, 72]
+            for size in font_sizes:
+                font_size_combo.addItem(str(size), size)
+            font_size_combo.setCurrentText(str(self.text_font.pointSize()))
+            font_size_combo.currentIndexChanged.connect(lambda: self.setFontSize(font_size_combo.currentData()))
+            font_size_combo.setFixedWidth(60)
+            self.property_layout.addWidget(font_size_combo)
+            
+            # 添加粗体复选框
+            bold_check = QCheckBox("粗体")
+            bold_check.setChecked(self.text_bold)
+            bold_check.stateChanged.connect(self.toggleBold)
+            self.property_layout.addWidget(bold_check)
+            
+        elif tool_type == "mosaic":
+            # 添加马赛克大小滑块
+            self.property_layout.addWidget(QLabel("马赛克大小:"))
+            mosaic_slider = QSlider(Qt.Horizontal)
+            mosaic_slider.setMinimum(2)
+            mosaic_slider.setMaximum(50)
+            mosaic_slider.setValue(self.mosaic_size)
+            mosaic_slider.setFixedWidth(150)
+            mosaic_slider.valueChanged.connect(self.setMosaicSize)
+            
+            # 显示当前大小
+            size_label = QLabel(f"{self.mosaic_size}px")
+            size_label.setFixedWidth(40)
+            size_label.setObjectName("mosaic_size_label")
+            
+            # 马赛克slider值变化时更新标签
+            mosaic_slider.valueChanged.connect(lambda v: size_label.setText(f"{v}px"))
+            
+            mosaic_layout = QHBoxLayout()
+            mosaic_layout.addWidget(mosaic_slider)
+            mosaic_layout.addWidget(size_label)
+            
+            mosaic_widget = QWidget()
+            mosaic_widget.setLayout(mosaic_layout)
+            self.property_layout.addWidget(mosaic_widget)
+        
+        # 添加弹性空间，使控件靠左对齐
+        self.property_layout.addStretch()
+        
+        # 显示属性面板
+        self.property_panel.show()
+        self.property_panel_visible = True
+        
+        # 调整窗口大小
+        if self.current_pixmap:
+            self.resize(self.current_pixmap.width(), self.current_pixmap.height() + 100)  # +100为工具栏和属性面板高度
+
+    def setPenWidth(self, width):
+        """设置边框粗细"""
+        self.pen_width = width
+        print(f"设置边框粗细: {width}")
+
+    def setMosaicSize(self, size):
+        """设置马赛克大小"""
+        self.mosaic_size = size
+        print(f"设置马赛克大小: {size}")
+
+    def setFontSize(self, size):
+        """设置字体大小"""
+        if size:
+            font = self.text_font
+            font.setPointSize(size)
+            self.text_font = font
+            print(f"设置字体大小: {size}")
+            
+            # 如果是在文本输入模式下，确保更新后仍然保持文本输入状态
+            if self.is_text_input:
+                self.updateImageLabel()
+                if self.text_cursor_timer and not self.text_cursor_timer.isActive():
+                    self.text_cursor_timer.start(500)
+
+    def toggleBold(self, state):
+        """切换粗体状态"""
+        self.text_bold = state == Qt.Checked
+        font = self.text_font
+        font.setBold(self.text_bold)
+        self.text_font = font
+        print(f"粗体状态: {self.text_bold}")
+        
+        # 如果是在文本输入模式下，确保更新后仍然保持文本输入状态
+        if self.is_text_input:
+            self.updateImageLabel()
+            if self.text_cursor_timer and not self.text_cursor_timer.isActive():
+                self.text_cursor_timer.start(500)
+
+    def copyToClipboard(self):
+        """复制当前图像到剪贴板，包含所有编辑内容"""
+        if self.current_pixmap:
+            # 创建一个临时的pixmap，确保包含所有绘制的内容
+            temp_pixmap = QPixmap(self.current_pixmap)
+            painter = QPainter(temp_pixmap)
+            painter.setRenderHint(QPainter.Antialiasing)
+            
+            # 绘制所有形状
+            for shape in self.shapes:
+                self.drawShape(painter, shape)
+            
+            # 如果正在输入文本，完成文本输入
+            if self.is_text_input and self.current_text:
+                self.finishTextInput()
+                
+            painter.end()
+            
+            # 将带有所有编辑内容的图像复制到剪贴板
+            QApplication.clipboard().setPixmap(temp_pixmap)
+            print("已复制带有标记的图像到剪贴板")
+            
+            # 复制完成后关闭UI
+            self.close()
+            
+            # 发出编辑完成信号
+            self.editingFinished.emit(temp_pixmap)
+
+    def getHandleAtPosition(self, pos):
+        """检查指定位置是否有控制点，返回(形状索引, 控制点索引)"""
+        handle_size = 12  # 增大控制点检测范围，使其更容易选中
+        
+        # 从后向前检查，以便后绘制的形状优先
+        for i in range(len(self.shapes)-1, -1, -1):
+            shape = self.shapes[i]
+            if shape["type"] in ["rectangle", "circle"]:
+                rect = QRect(shape["start"], shape["end"]).normalized()
+                
+                # 检查四个角落的控制点
+                # 左上角
+                if abs(pos.x() - rect.left()) <= handle_size and abs(pos.y() - rect.top()) <= handle_size:
+                    return i, 0
+                # 右上角
+                if abs(pos.x() - rect.right()) <= handle_size and abs(pos.y() - rect.top()) <= handle_size:
+                    return i, 1
+                # 左下角
+                if abs(pos.x() - rect.left()) <= handle_size and abs(pos.y() - rect.bottom()) <= handle_size:
+                    return i, 2
+                # 右下角
+                if abs(pos.x() - rect.right()) <= handle_size and abs(pos.y() - rect.bottom()) <= handle_size:
+                    return i, 3
+        
+        return -1, -1
+
+    def resizeShape(self, pos):
+        """调整当前选中形状的大小"""
+        if self.resize_shape_index < 0 or self.resize_shape_index >= len(self.shapes):
+            return
+        
+        # 获取当前形状
+        shape = self.shapes[self.resize_shape_index]
+        if shape["type"] not in ["rectangle", "circle"]:
+            return
+        
+        # 获取规范化的矩形（确保左上角是start，右下角是end）
+        rect = QRect(shape["start"], shape["end"]).normalized()
+        left = rect.left()
+        top = rect.top()
+        right = rect.right()
+        bottom = rect.bottom()
+        
+        # 根据控制点调整矩形大小
+        if self.resize_handle == 0:  # 左上角
+            left = pos.x()
+            top = pos.y()
+        elif self.resize_handle == 1:  # 右上角
+            right = pos.x()
+            top = pos.y()
+        elif self.resize_handle == 2:  # 左下角
+            left = pos.x()
+            bottom = pos.y()
+        elif self.resize_handle == 3:  # 右下角
+            right = pos.x()
+            bottom = pos.y()
+        
+        # 创建新的矩形
+        new_rect = QRect(QPoint(left, top), QPoint(right, bottom)).normalized()
+        
+        # 确保矩形不会太小
+        min_size = 5
+        if new_rect.width() < min_size:
+            if self.resize_handle in [0, 2]:  # 左边控制点
+                new_rect.setLeft(new_rect.right() - min_size)
+            else:  # 右边控制点
+                new_rect.setRight(new_rect.left() + min_size)
+        
+        if new_rect.height() < min_size:
+            if self.resize_handle in [0, 1]:  # 上边控制点
+                new_rect.setTop(new_rect.bottom() - min_size)
+            else:  # 下边控制点
+                new_rect.setBottom(new_rect.top() + min_size)
+        
+        # 更新形状的起点和终点
+        shape["start"] = new_rect.topLeft()
+        shape["end"] = new_rect.bottomRight()
+        
+        # 更新显示
+        self.updateImageLabel()
+
+    def finishResizeShape(self):
+        """完成形状大小调整"""
+        self.is_resizing = False
+        self.resize_shape_index = -1
+        self.resize_handle = -1
+        self.image_label.setCursor(Qt.ArrowCursor)
 
 def edit_screenshot(pixmap):
     """创建并显示截图编辑器"""
