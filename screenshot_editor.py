@@ -1,6 +1,7 @@
 from PyQt5.QtWidgets import (QWidget, QApplication, QLabel, QVBoxLayout, QHBoxLayout,
                            QPushButton, QToolBar, QAction, QColorDialog, QFontDialog,
-                           QSizePolicy, QInputDialog, QLineEdit, QSlider, QComboBox, QCheckBox)
+                           QSizePolicy, QInputDialog, QLineEdit, QSlider, QComboBox, QCheckBox,
+                           QFileDialog)
 from PyQt5.QtCore import Qt, QPoint, QRect, QSize, pyqtSignal, QTimer
 from PyQt5.QtGui import QPixmap, QImage, QPainter, QPen, QColor, QFont, QIcon, QBrush, QCursor, QFontMetrics
 
@@ -80,12 +81,16 @@ class ScreenshotEditor(QWidget):
         # 创建工具栏
         self.toolbar = QToolBar()
         self.toolbar.setIconSize(QSize(32, 32))
+        # 设置工具栏可以自适应大小，并添加滚动条
+        self.toolbar.setMovable(False)  # 禁止移动工具栏
+        self.toolbar.setFloatable(False)  # 禁止浮动
         self.toolbar.setStyleSheet("""
             QToolBar {
                 background-color: #3D3D3D;
                 border: none;
                 spacing: 2px;
                 padding: 5px;
+                min-height: 45px;
             }
             QToolBar::separator {
                 background-color: #5A5A5A;
@@ -98,6 +103,7 @@ class ScreenshotEditor(QWidget):
                 background-color: transparent;
                 padding: 5px;
                 color: white;
+                min-width: 40px;
             }
             QToolButton:hover {
                 background-color: #505050;
@@ -183,10 +189,16 @@ class ScreenshotEditor(QWidget):
         self.setLayout(main_layout)
         
         # 设置窗口大小
+        min_width = 600  # 设置最小宽度，确保工具栏能完整显示
         if self.current_pixmap:
-            self.resize(self.current_pixmap.width(), self.current_pixmap.height() + 50)  # +50 为工具栏高度
+            # 确保窗口宽度不小于最小宽度
+            window_width = max(self.current_pixmap.width(), min_width)
+            self.resize(window_width, self.current_pixmap.height() + 50)  # +50 为工具栏高度
         else:
             self.resize(800, 650)
+            
+        # 设置窗口最小尺寸
+        self.setMinimumWidth(min_width)
         
         # 启用输入法
         self.setAttribute(Qt.WA_InputMethodEnabled, True)
@@ -321,23 +333,23 @@ class ScreenshotEditor(QWidget):
         save_painter.drawLine(12, 16, 16, 12)
         save_painter.end()
         save_action.setIcon(QIcon(save_pixmap))
-        save_action.setToolTip("保存并返回")
+        save_action.setToolTip("保存到文件并隐藏")
         save_action.triggered.connect(self.saveImage)
         self.toolbar.addAction(save_action)
         
-        # 取消按钮
-        cancel_action = QAction("取消", self)
-        cancel_pixmap = QPixmap(24, 24)
-        cancel_pixmap.fill(Qt.transparent)
-        cancel_painter = QPainter(cancel_pixmap)
-        cancel_painter.setPen(QPen(Qt.white, 2))
-        cancel_painter.drawLine(6, 6, 18, 18)
-        cancel_painter.drawLine(6, 18, 18, 6)
-        cancel_painter.end()
-        cancel_action.setIcon(QIcon(cancel_pixmap))
-        cancel_action.setToolTip("取消编辑并返回")
-        cancel_action.triggered.connect(self.close)
-        self.toolbar.addAction(cancel_action)
+        # # 取消按钮
+        # cancel_action = QAction("取消", self)
+        # cancel_pixmap = QPixmap(24, 24)
+        # cancel_pixmap.fill(Qt.transparent)
+        # cancel_painter = QPainter(cancel_pixmap)
+        # cancel_painter.setPen(QPen(Qt.white, 2))
+        # cancel_painter.drawLine(6, 6, 18, 18)
+        # cancel_painter.drawLine(6, 18, 18, 6)
+        # cancel_painter.end()
+        # cancel_action.setIcon(QIcon(cancel_pixmap))
+        # # cancel_action.setToolTip("取消编辑并返回")
+        # cancel_action.triggered.connect(self.close)
+        # self.toolbar.addAction(cancel_action)
     
     def setTool(self, tool_name):
         """设置当前使用的工具"""
@@ -393,9 +405,14 @@ class ScreenshotEditor(QWidget):
             if self.is_text_input:
                 # 强制更新显示
                 self.updateImageLabel()
-                # 确保文本光标仍然可见
+                # 确保文本光标仍然可见并且焦点没有丢失
                 if self.text_cursor_timer and not self.text_cursor_timer.isActive():
                     self.text_cursor_timer.start(500)
+                
+                # 确保窗口保持文本输入状态
+                self.is_text_input = True
+                # 返回键盘焦点到控件
+                self.setFocus()
     
     def setFont(self):
         """设置文本字体"""
@@ -408,9 +425,14 @@ class ScreenshotEditor(QWidget):
             if self.is_text_input:
                 # 强制更新显示
                 self.updateImageLabel()
-                # 确保文本光标仍然可见
+                # 确保文本光标仍然可见并且焦点没有丢失
                 if self.text_cursor_timer and not self.text_cursor_timer.isActive():
                     self.text_cursor_timer.start(500)
+                
+                # 确保窗口保持文本输入状态
+                self.is_text_input = True
+                # 返回键盘焦点到控件
+                self.setFocus()
     
     def eventFilter(self, source, event):
         """事件过滤器，用于处理鼠标事件"""
@@ -857,14 +879,14 @@ class ScreenshotEditor(QWidget):
         print("清除所有内容")
     
     def saveImage(self):
-        """保存编辑后的图像并关闭编辑器"""
+        """保存编辑后的图像到文件,并隐藏编辑器"""
         # 确保完成所有文本输入
         if self.is_text_input and self.current_text:
             self.finishTextInput()
         
-        # 获取当前显示的图像，包含所有绘制的内容
+        # 获取当前显示的图像,包含所有绘制的内容
         if self.current_pixmap:
-            # 创建一个临时的pixmap，确保包含所有绘制的内容
+            # 创建一个临时的pixmap,确保包含所有绘制的内容
             temp_pixmap = QPixmap(self.current_pixmap)
             painter = QPainter(temp_pixmap)
             painter.setRenderHint(QPainter.Antialiasing)
@@ -875,10 +897,29 @@ class ScreenshotEditor(QWidget):
                 
             painter.end()
             
-            # 发出信号，通知截图编辑完成
+            # 打开文件保存对话框
+            file_path, _ = QFileDialog.getSaveFileName(
+                self,
+                "保存截图",
+                os.path.expanduser("~/Pictures/screenshot.png"),
+                "Images (*.png *.jpg *.jpeg *.bmp)"
+            )
+            
+            if file_path:
+                # 保存图像
+                temp_pixmap.save(file_path)
+                print(f"图像已保存到: {file_path}")
+            
+            # 发出信号,通知截图编辑完成
             self.editingFinished.emit(temp_pixmap)
-            print("图像编辑完成")
-            self.close()
+            
+            # 隐藏窗口而不是关闭
+            self.hide()
+            
+            # 清空当前绘制内容,准备下次使用
+            self.shapes = []
+            self.current_pixmap = QPixmap(self.original_pixmap)
+            self.updateImageLabel()
     
     def keyPressEvent(self, event):
         """处理键盘事件"""
@@ -1268,8 +1309,11 @@ class ScreenshotEditor(QWidget):
         self.property_panel_visible = True
         
         # 调整窗口大小
+        min_width = 600  # 确保工具栏能完整显示的最小宽度
         if self.current_pixmap:
-            self.resize(self.current_pixmap.width(), self.current_pixmap.height() + 100)  # +100为工具栏和属性面板高度
+            # 确保宽度不小于最小宽度
+            window_width = max(self.current_pixmap.width(), min_width)
+            self.resize(window_width, self.current_pixmap.height() + 100)  # +100为工具栏和属性面板高度
 
     def setPenWidth(self, width):
         """设置边框粗细"""
@@ -1294,6 +1338,11 @@ class ScreenshotEditor(QWidget):
                 self.updateImageLabel()
                 if self.text_cursor_timer and not self.text_cursor_timer.isActive():
                     self.text_cursor_timer.start(500)
+                
+                # 确保窗口保持文本输入状态
+                self.is_text_input = True
+                # 返回键盘焦点到控件
+                self.setFocus()
 
     def toggleBold(self, state):
         """切换粗体状态"""
@@ -1308,6 +1357,11 @@ class ScreenshotEditor(QWidget):
             self.updateImageLabel()
             if self.text_cursor_timer and not self.text_cursor_timer.isActive():
                 self.text_cursor_timer.start(500)
+            
+            # 确保窗口保持文本输入状态
+            self.is_text_input = True
+            # 返回键盘焦点到控件
+            self.setFocus()
 
     def copyToClipboard(self):
         """复制当前图像到剪贴板，包含所有编辑内容"""
