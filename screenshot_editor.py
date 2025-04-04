@@ -546,18 +546,14 @@ class ScreenshotEditor(QWidget):
         return super().eventFilter(source, event)
     
     def mousePressEvent(self, event):
-        """处理鼠标按下事件，支持拖动窗口"""
-        if event.button() == Qt.LeftButton:
-            # 如果点击在工具栏之外的区域，允许拖动窗口
-            if not self.toolbar.geometry().contains(event.pos()):
-                self.drag_position = event.globalPos() - self.frameGeometry().topLeft()
-                event.accept()
-    
+        """处理鼠标按下事件"""
+        # 移除了拖动窗口功能
+        super().mousePressEvent(event)
+
     def mouseMoveEvent(self, event):
-        """处理鼠标移动事件，支持拖动窗口"""
-        if event.buttons() == Qt.LeftButton and hasattr(self, 'drag_position'):
-            self.move(event.globalPos() - self.drag_position)
-            event.accept()
+        """处理鼠标移动事件"""
+        # 移除了拖动窗口功能
+        super().mouseMoveEvent(event)
     
     def startDrawing(self, pos):
         """开始绘制"""
