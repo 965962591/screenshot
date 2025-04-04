@@ -72,6 +72,9 @@ class ScreenshotEditor(QWidget):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
         
+        # 设置窗口和布局为透明背景
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        
         # 创建图像显示区域
         self.image_label = QLabel()
         self.image_label.setPixmap(self.current_pixmap)
@@ -82,6 +85,15 @@ class ScreenshotEditor(QWidget):
         # 设置图像标签的尺寸策略，确保图像不会被拉伸
         self.image_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.image_label.setScaledContents(False)
+        # 设置图像标签的背景为透明
+        self.image_label.setStyleSheet("background-color: transparent;")
+        
+        # 创建一个容器部件，包含工具栏等控件
+        self.controls_container = QWidget()
+        self.controls_container.setStyleSheet("background-color: #3D3D3D;")
+        controls_layout = QVBoxLayout(self.controls_container)
+        controls_layout.setContentsMargins(0, 0, 0, 0)
+        controls_layout.setSpacing(0)
         
         # 创建工具栏
         self.toolbar = QToolBar()
@@ -187,9 +199,11 @@ class ScreenshotEditor(QWidget):
         self.property_layout.setContentsMargins(10, 5, 10, 5)
         
         # 将组件添加到布局
+        controls_layout.addWidget(self.property_panel)
+        controls_layout.addWidget(self.toolbar)
+        
         main_layout.addWidget(self.image_label)
-        main_layout.addWidget(self.property_panel)
-        main_layout.addWidget(self.toolbar)
+        main_layout.addWidget(self.controls_container)
         
         self.setLayout(main_layout)
         
@@ -342,19 +356,19 @@ class ScreenshotEditor(QWidget):
         save_action.triggered.connect(self.saveImage)
         self.toolbar.addAction(save_action)
         
-        # # 取消按钮
-        # cancel_action = QAction("取消", self)
-        # cancel_pixmap = QPixmap(24, 24)
-        # cancel_pixmap.fill(Qt.transparent)
-        # cancel_painter = QPainter(cancel_pixmap)
-        # cancel_painter.setPen(QPen(Qt.white, 2))
-        # cancel_painter.drawLine(6, 6, 18, 18)
-        # cancel_painter.drawLine(6, 18, 18, 6)
-        # cancel_painter.end()
-        # cancel_action.setIcon(QIcon(cancel_pixmap))
-        # # cancel_action.setToolTip("取消编辑并返回")
-        # cancel_action.triggered.connect(self.close)
-        # self.toolbar.addAction(cancel_action)
+        # 添加关闭按钮 - 隐藏窗口但不关闭程序
+        close_action = QAction("关闭", self)
+        close_pixmap = QPixmap(24, 24)
+        close_pixmap.fill(Qt.transparent)
+        close_painter = QPainter(close_pixmap)
+        close_painter.setPen(QPen(Qt.white, 2))
+        close_painter.drawLine(6, 6, 18, 18)
+        close_painter.drawLine(6, 18, 18, 6)
+        close_painter.end()
+        close_action.setIcon(QIcon(close_pixmap))
+        close_action.setToolTip("隐藏界面")
+        close_action.triggered.connect(self.hideEditor)
+        self.toolbar.addAction(close_action)
     
     def setTool(self, tool_name):
         """设置当前使用的工具"""
@@ -1501,6 +1515,20 @@ class ScreenshotEditor(QWidget):
         self.resize_shape_index = -1
         self.resize_handle = -1
         self.image_label.setCursor(Qt.ArrowCursor)
+
+    def hideEditor(self):
+        """隐藏编辑器，清空内容，准备下次使用"""
+        # 如果正在输入文本，结束文本输入
+        if self.is_text_input and self.current_text:
+            self.finishTextInput()
+        
+        # 清空当前绘制内容，准备下次使用
+        self.shapes = []
+        self.current_pixmap = QPixmap(self.original_pixmap)
+        self.updateImageLabel()
+        
+        # 隐藏窗口但不关闭
+        self.hide()
 
 def edit_screenshot(pixmap):
     """创建并显示截图编辑器"""
