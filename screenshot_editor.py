@@ -1,10 +1,6 @@
-from PyQt5.QtWidgets import (QWidget, QApplication, QLabel, QVBoxLayout, QHBoxLayout,
-                           QPushButton, QToolBar, QAction, QColorDialog, QFontDialog,
-                           QSizePolicy, QInputDialog, QLineEdit, QSlider, QComboBox, QCheckBox,
-                           QFileDialog)
-from PyQt5.QtCore import Qt, QPoint, QRect, QSize, pyqtSignal, QTimer
-from PyQt5.QtGui import QPixmap, QImage, QPainter, QPen, QColor, QFont, QIcon, QBrush, QCursor, QFontMetrics
-
+from PyQt5.QtWidgets import *
+from PyQt5.QtCore import *
+from PyQt5.QtGui import *
 import os
 import sys
 import math
@@ -207,17 +203,27 @@ class ScreenshotEditor(QWidget):
         controls_layout.addWidget(self.property_panel)
         controls_layout.addWidget(self.toolbar)
         
+        # 获取工具栏预期尺寸
+        self.toolbar.adjustSize()
+        toolbar_width = self.toolbar.sizeHint().width()
+        toolbar_height = self.toolbar.sizeHint().height()
+        if self.property_panel.isVisible():
+            toolbar_height += self.property_panel.height()
+        
+        # 默认布局 - 工具栏在底部
         main_layout.addWidget(self.image_label)
         main_layout.addWidget(self.controls_container)
         
         self.setLayout(main_layout)
         
         # 设置窗口大小
-        min_width = 600  # 设置最小宽度，确保工具栏能完整显示
+        min_width = max(600, toolbar_width + 20)  # 设置最小宽度，确保工具栏能完整显示
+        
         if self.current_pixmap:
             # 确保窗口宽度不小于最小宽度
             window_width = max(self.current_pixmap.width(), min_width)
-            self.resize(window_width, self.current_pixmap.height() + 50)  # +50 为工具栏高度
+            window_height = self.current_pixmap.height() + toolbar_height + 10
+            self.resize(window_width, window_height)
         else:
             self.resize(800, 650)
             
@@ -234,11 +240,99 @@ class ScreenshotEditor(QWidget):
         
         self.updateImageLabel()
         
-        # 如果提供了屏幕位置，则将窗口移动到指定位置
+        # 移动窗口到指定位置，并调整位置确保工具栏完全可见
         if self.screen_pos:
-            self.move(self.screen_pos)
+            self.adjustWindowPosition()
         
         self.show()
+        
+        # 窗口显示后，确保工具栏完全可见
+        QTimer.singleShot(100, self.ensureToolbarVisible)
+        
+    def adjustWindowPosition(self):
+        """根据屏幕位置调整窗口位置，确保工具栏完全可见"""
+        if not self.screen_pos:
+            return
+            
+        # 获取当前屏幕信息
+        screen = QApplication.screenAt(self.screen_pos)
+        if not screen:
+            screen = QApplication.primaryScreen()
+        
+        screen_geometry = screen.availableGeometry()
+        
+        # 获取窗口和工具栏尺寸
+        window_width = self.width()
+        window_height = self.height()
+        toolbar_height = self.controls_container.sizeHint().height()
+        
+        # 计算窗口右下角坐标
+        bottom_right_x = self.screen_pos.x() + window_width
+        bottom_right_y = self.screen_pos.y() + window_height
+        
+        # 检查是否需要调整窗口位置
+        adjusted_pos = QPoint(self.screen_pos)
+        
+        # 检查右边界
+        if bottom_right_x > screen_geometry.right():
+            # 窗口右侧超出屏幕，向左移动
+            adjusted_pos.setX(max(screen_geometry.left(), screen_geometry.right() - window_width))
+        
+        # 检查底部边界
+        if bottom_right_y > screen_geometry.bottom():
+            # 窗口底部超出屏幕，向上移动
+            adjusted_pos.setY(max(screen_geometry.top(), screen_geometry.bottom() - window_height))
+        
+        # 应用调整后的位置
+        self.move(adjusted_pos)
+        
+        # 记录调整后的位置，用于后续计算
+        self.screen_pos = adjusted_pos
+        
+    def ensureToolbarVisible(self):
+        """确保工具栏完全可见，如果需要则改变布局"""
+        if not hasattr(self, 'screen_pos') or not self.screen_pos:
+            return
+            
+        # 获取当前屏幕信息
+        screen = QApplication.screenAt(self.mapToGlobal(QPoint(0, 0)))
+        if not screen:
+            screen = QApplication.primaryScreen()
+            
+        screen_geometry = screen.availableGeometry()
+        
+        # 获取窗口位置和尺寸
+        window_pos = self.mapToGlobal(QPoint(0, 0))
+        window_width = self.width()
+        window_height = self.height()
+        
+        # 获取工具栏尺寸
+        toolbar_height = self.controls_container.sizeHint().height()
+        toolbar_width = self.controls_container.sizeHint().width()
+        
+        # 检查工具栏是否会超出屏幕底部
+        if window_pos.y() + window_height > screen_geometry.bottom():
+            # 将工具栏移到顶部
+            main_layout = self.layout()
+            main_layout.removeWidget(self.image_label)
+            main_layout.removeWidget(self.controls_container)
+            
+            main_layout.addWidget(self.controls_container)
+            main_layout.addWidget(self.image_label)
+            
+            print("工具栏移到顶部")
+        
+        # 检查工具栏是否会超出屏幕右侧
+        if window_pos.x() + toolbar_width > screen_geometry.right():
+            # 设置工具栏右对齐
+            self.toolbar.setLayoutDirection(Qt.RightToLeft)
+            print("工具栏设置为右对齐")
+        else:
+            # 设置工具栏左对齐
+            self.toolbar.setLayoutDirection(Qt.LeftToRight)
+        
+        # 强制更新布局
+        self.updateGeometry()
     
     def createToolButton(self, text, icon_color, callback, tooltip=None):
         """创建工具按钮"""

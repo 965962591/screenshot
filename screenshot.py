@@ -1,8 +1,8 @@
-import sys
+
 import os
-from PyQt5.QtWidgets import QApplication, QWidget, QMainWindow, QLabel, QSystemTrayIcon, QMenu, QAction, QShortcut
-from PyQt5.QtCore import Qt, QRect, QPoint, QTimer
-from PyQt5.QtGui import QPainter, QColor, QPen, QScreen, QCursor, QPixmap, QImage, QIcon, QKeySequence
+from PyQt5.QtWidgets import *
+from PyQt5.QtCore import *
+from PyQt5.QtGui import *
 import mss
 # import numpy as np
 from PIL import Image
