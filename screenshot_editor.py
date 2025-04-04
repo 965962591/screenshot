@@ -343,7 +343,12 @@ class ScreenshotEditor(QWidget):
         """设置当前使用的工具"""
         # 如果之前在进行文本输入，取消输入状态
         if self.is_text_input and tool_name != "text_input":
-            self.finishTextInput()
+            if self.current_text:  # 如果有未完成的文本，保存它
+                self.finishTextInput()
+            # 无论是否有文本，都需要完全退出文本输入模式
+            self.is_text_input = False
+            if self.text_cursor_timer and self.text_cursor_timer.isActive():
+                self.text_cursor_timer.stop()
         
         # 设置当前工具
         self.current_tool = tool_name
@@ -355,7 +360,7 @@ class ScreenshotEditor(QWidget):
         # 根据工具类型设置特定属性
         if tool_name == "text_input":
             self.is_text_input = True
-            self.current_text = ""
+            self.current_text = ""  # 重置当前文本，但不影响已保存的文本
             
             # 设置文本光标闪烁
             if self.text_cursor_timer is None:
@@ -367,6 +372,9 @@ class ScreenshotEditor(QWidget):
         # 如果选择了马赛克工具，不再显示对话框，改为使用属性面板控制
         elif tool_name == "mosaic":
             pass  # 已在属性面板中处理
+        
+        # 更新显示
+        self.updateImageLabel()
     
     def setColor(self):
         """设置画笔颜色"""
@@ -407,16 +415,19 @@ class ScreenshotEditor(QWidget):
     def eventFilter(self, source, event):
         """事件过滤器，用于处理鼠标事件"""
         if source == self.image_label:
-            # 如果正在输入文本，不处理鼠标事件
-            if self.is_text_input and event.type() in [event.MouseButtonPress, event.MouseMove, event.MouseButtonRelease]:
-                # 仅设置文本起始位置
-                if event.type() == event.MouseButtonPress and event.button() == Qt.LeftButton:
-                    self.start_point = event.pos()
-                    self.updateImageLabel()
-                return True
-            
             # 处理鼠标按下事件
             if event.type() == event.MouseButtonPress and event.button() == Qt.LeftButton:
+                # 如果正在文本输入，处理文本点击
+                if self.is_text_input:
+                    # 如果有当前文本，先保存
+                    if self.current_text:
+                        self.finishTextInput()
+                    
+                    self.start_point = event.pos()
+                    self.current_text = ""  # 清空当前文本，准备新输入
+                    self.updateImageLabel()
+                    return True
+                
                 # 检查是否点击了控制点（用于调整大小）
                 shape_index, handle_index = self.getHandleAtPosition(event.pos())
                 if shape_index >= 0 and handle_index >= 0:
@@ -443,6 +454,10 @@ class ScreenshotEditor(QWidget):
                 
             # 处理鼠标移动事件
             elif event.type() == event.MouseMove:
+                # 如果在文本输入模式下移动鼠标，不做特殊处理
+                if self.is_text_input:
+                    return True
+                
                 # 更新鼠标指针样式
                 shape_index, handle_index = self.getHandleAtPosition(event.pos())
                 if shape_index >= 0 and handle_index >= 0:
@@ -470,6 +485,10 @@ class ScreenshotEditor(QWidget):
             
             # 处理鼠标释放事件
             elif event.type() == event.MouseButtonRelease and event.button() == Qt.LeftButton:
+                # 如果在文本输入模式下释放鼠标，不做特殊处理
+                if self.is_text_input:
+                    return True
+                
                 if self.is_resizing:
                     # 完成调整大小
                     self.finishResizeShape()
@@ -504,6 +523,14 @@ class ScreenshotEditor(QWidget):
         if not self.current_tool:
             return
         
+        # 如果在文本输入模式下，先完成当前文本输入
+        if self.is_text_input and self.current_tool != "text_input":
+            if self.current_text:
+                self.finishTextInput()
+            self.is_text_input = False
+            if self.text_cursor_timer and self.text_cursor_timer.isActive():
+                self.text_cursor_timer.stop()
+        
         self.is_drawing = True
         self.start_point = pos
         self.end_point = pos
@@ -529,7 +556,8 @@ class ScreenshotEditor(QWidget):
         # 如果是直接文本输入，设置起始位置
         elif self.current_tool == "text_input":
             self.is_text_input = True
-            self.current_text = ""
+            self.current_text = ""  # 新的文本输入，重置当前文本
+            self.start_point = pos  # 设置新文本的起始位置
             self.is_drawing = False
             
             # 确保文本光标闪烁
@@ -540,6 +568,9 @@ class ScreenshotEditor(QWidget):
                 self.text_cursor_timer.start(500)
             
             self.updateImageLabel()
+            
+        # 更新显示，确保视觉反馈
+        self.updateImageLabel()
     
     def drawing(self, pos):
         """绘制过程"""
@@ -658,10 +689,11 @@ class ScreenshotEditor(QWidget):
             
             # 绘制已输入的文本
             text_to_draw = self.current_text
-            painter.drawText(self.start_point, text_to_draw)
+            if self.start_point and text_to_draw:  # 确保有效的起始点和文本
+                painter.drawText(self.start_point, text_to_draw)
             
             # 计算光标位置
-            if self.text_cursor_visible:
+            if self.text_cursor_visible and self.start_point:
                 # 计算文本宽度
                 font_metrics = painter.fontMetrics()
                 text_width = font_metrics.width(text_to_draw)
@@ -826,10 +858,25 @@ class ScreenshotEditor(QWidget):
     
     def saveImage(self):
         """保存编辑后的图像并关闭编辑器"""
-        # 获取当前显示的图像
+        # 确保完成所有文本输入
+        if self.is_text_input and self.current_text:
+            self.finishTextInput()
+        
+        # 获取当前显示的图像，包含所有绘制的内容
         if self.current_pixmap:
+            # 创建一个临时的pixmap，确保包含所有绘制的内容
+            temp_pixmap = QPixmap(self.current_pixmap)
+            painter = QPainter(temp_pixmap)
+            painter.setRenderHint(QPainter.Antialiasing)
+            
+            # 绘制所有形状
+            for shape in self.shapes:
+                self.drawShape(painter, shape)
+                
+            painter.end()
+            
             # 发出信号，通知截图编辑完成
-            self.editingFinished.emit(self.current_pixmap)
+            self.editingFinished.emit(temp_pixmap)
             print("图像编辑完成")
             self.close()
     
@@ -839,7 +886,16 @@ class ScreenshotEditor(QWidget):
         if event.key() == Qt.Key_Escape:
             # 如果正在输入文本，先取消输入
             if self.is_text_input:
-                self.finishTextInput()
+                if self.current_text:  # 如果有文本，保存它
+                    self.finishTextInput()
+                else:  # 如果没有文本，退出文本模式
+                    self.is_text_input = False
+                    self.current_text = ""
+                    if self.text_cursor_timer and self.text_cursor_timer.isActive():
+                        self.text_cursor_timer.stop()
+                    self.current_tool = None  # 取消当前工具选择
+                    self.updateImageLabel()
+                return  # 不关闭窗口，只退出文本模式
             self.close()
         # 回车完成输入
         elif self.is_text_input and (event.key() == Qt.Key_Return or event.key() == Qt.Key_Enter):
@@ -867,7 +923,7 @@ class ScreenshotEditor(QWidget):
     
     def finishTextInput(self):
         """完成文本输入并保存"""
-        if self.is_text_input and self.current_text:
+        if self.is_text_input and self.current_text and self.start_point:
             # 创建文本形状
             shape = {
                 "type": "text",
@@ -880,15 +936,26 @@ class ScreenshotEditor(QWidget):
             self.shapes.append(shape)
             print(f"添加文本: {self.current_text}")
         
-        # 重置文本输入状态
-        self.is_text_input = False
-        self.current_text = ""
-        
-        # 停止光标闪烁
-        if self.text_cursor_timer:
-            self.text_cursor_timer.stop()
-        
-        self.updateImageLabel()
+            # 重置文本输入状态但保持工具选中
+            self.current_text = ""
+            
+            # 保持is_text_input为True，以便可以继续输入文本
+            # 停止光标闪烁但准备重新开始
+            if self.text_cursor_timer and self.text_cursor_timer.isActive():
+                self.text_cursor_timer.stop()
+                
+            # 更新显示
+            self.updateImageLabel()
+            
+            # 让光标继续闪烁，准备下一次输入
+            if self.text_cursor_timer:
+                self.text_cursor_timer.start(500)
+            
+            return True  # 返回True表示成功添加了文本
+        elif self.is_text_input:
+            # 如果没有文本但正在文本输入模式，只重置当前文本
+            self.current_text = ""
+            return False  # 返回False表示没有添加文本
     
     def getShapeAtPosition(self, pos):
         """检查指定位置是否有形状，返回形状索引"""
@@ -1264,10 +1331,10 @@ class ScreenshotEditor(QWidget):
             QApplication.clipboard().setPixmap(temp_pixmap)
             print("已复制带有标记的图像到剪贴板")
             
-            # 复制完成后关闭UI
-            self.close()
+            # 发出编辑完成信号，但不关闭窗口，只隐藏
+            self.hide()
             
-            # 发出编辑完成信号
+            # 通知父应用，已完成编辑
             self.editingFinished.emit(temp_pixmap)
 
     def getHandleAtPosition(self, pos):
