@@ -12,6 +12,7 @@ import win32gui
 import ctypes
 from ctypes import wintypes
 from floating_window import create_floating_window
+from screenshot_editor import edit_screenshot
 
 def print_help():
     """打印帮助信息"""
@@ -26,6 +27,8 @@ def print_help():
     print("7. 按 H 键显示此帮助信息")
     print("8. 按 C 键取消当前选择")
     print("9. 右键点击系统托盘图标可以退出程序")
+    print("10. 按下 Ctrl+W 开始浮动截图，截图内容将显示在可拖动窗口中")
+    print("11. 按下 Ctrl+R 开始编辑截图，截图后可以添加矩形、文字和马赛克等")
     print("====================")
 
 class MouseTracker(QWidget):
@@ -234,10 +237,14 @@ class ScreenOverlay(QWidget):
             print("选择的区域太小，请重新选择 (至少 10x10 像素)")
             return
         
-        # 检查是否是浮动截图模式
+        # 检查不同的截图模式
         if hasattr(self.parent_app, 'is_floating') and self.parent_app.is_floating:
             self.parent_app.capture_floating_screenshot(selected_rect, screen_info)
             self.parent_app.is_floating = False  # 重置浮动标记
+            return
+        elif hasattr(self.parent_app, 'is_editing') and self.parent_app.is_editing:
+            self.parent_app.capture_edit_screenshot(selected_rect, screen_info)
+            self.parent_app.is_editing = False  # 重置编辑标记
             return
         
         # 原有的普通截图逻辑
@@ -348,6 +355,7 @@ class ScreenOverlay(QWidget):
 # 定义全局热键ID
 HOTKEY_ID = 1
 FLOATING_HOTKEY_ID = 2  # 新增的热键ID
+EDIT_HOTKEY_ID = 3  # 用于编辑截图的热键ID
 
 # 为WM_HOTKEY消息设置窗口消息过滤器
 class WinEventFilter(QWidget):
@@ -368,6 +376,10 @@ class WinEventFilter(QWidget):
             elif msg.wParam == FLOATING_HOTKEY_ID:  # 新增的热键ID处理
                 self.parent.reset_screenshot_state()
                 self.parent.start_floating_screenshot()
+                return True, 0
+            elif msg.wParam == EDIT_HOTKEY_ID:  # 新增的编辑热键处理
+                self.parent.reset_screenshot_state()
+                self.parent.start_edit_screenshot()
                 return True, 0
         return False, 0
 
@@ -412,6 +424,9 @@ class ScreenCaptureApp(QWidget):
         
         self.is_floating = False  # 添加浮动截图模式标记
         self.floating_window = None  # 添加浮动窗口引用
+        
+        self.is_editing = False  # 添加编辑模式标记
+        self.screenshot_editor = None  # 截图编辑器引用
     
     def init_ui(self):
         # 创建系统托盘图标
@@ -462,7 +477,7 @@ class ScreenCaptureApp(QWidget):
             self.start_screenshot()
     
     def register_hotkey(self):
-        # 注册Ctrl+Q全局热键
+        # 注册全局热键
         self.event_filter.show()
         self.event_filter.hide()  # 隐藏但保持活动状态
         
@@ -478,6 +493,12 @@ class ScreenCaptureApp(QWidget):
             print("注册全局热键Ctrl+W失败")
         else:
             print("已注册全局热键: Ctrl+W (用于浮动截图)")
+        
+        # 注册Ctrl+R全局热键
+        if not win32gui.RegisterHotKey(hwnd, EDIT_HOTKEY_ID, win32con.MOD_CONTROL, ord('R')):
+            print("注册全局热键Ctrl+R失败")
+        else:
+            print("已注册全局热键: Ctrl+R (用于编辑截图)")
     
     def update_active_screen(self):
         # 此方法仅在已经开始截图时使用，用于在截图过程中切换屏幕
@@ -560,8 +581,20 @@ class ScreenCaptureApp(QWidget):
             except Exception as e:
                 print(f"关闭浮动窗口时出错: {e}")
         
+        # 关闭截图编辑器（如果存在）
+        if hasattr(self, 'screenshot_editor') and self.screenshot_editor is not None:
+            try:
+                print("关闭遗留的截图编辑器")
+                self.screenshot_editor.close()
+                self.screenshot_editor = None
+            except Exception as e:
+                print(f"关闭截图编辑器时出错: {e}")
+        
         # 重置浮动截图模式
         self.is_floating = False
+        
+        # 重置编辑模式
+        self.is_editing = False
         
         # 重置状态变量
         self.active_screen_index = -1
@@ -718,13 +751,117 @@ class ScreenCaptureApp(QWidget):
             
             print("浮动截图操作完成")
 
+    def start_edit_screenshot(self):
+        """开始一个用于编辑的截图操作"""
+        print("开始编辑截图操作...")
+        self.is_editing = True  # 标记为编辑模式
+        self.start_screenshot()
+
+    def capture_edit_screenshot(self, selected_rect, screen_info):
+        """执行编辑截图操作"""
+        try:
+            print("开始执行编辑截图...")
+            # 隐藏所有窗口以便截图
+            for widget in QApplication.topLevelWidgets():
+                if isinstance(widget, ScreenOverlay):
+                    widget.hide()
+            QApplication.processEvents()
+            
+            # 使用mss进行截图
+            with mss.mss() as sct:
+                # 计算截图区域
+                monitor = {
+                    "left": selected_rect.left() + screen_info.left(),
+                    "top": selected_rect.top() + screen_info.top(),
+                    "width": selected_rect.width(),
+                    "height": selected_rect.height()
+                }
+                
+                print(f"截图区域: 左上角({monitor['left']}, {monitor['top']}), 宽x高({monitor['width']}x{monitor['height']})")
+                
+                try:
+                    # 抓取屏幕
+                    screenshot = sct.grab(monitor)
+                    
+                    # 确保截图数据有效
+                    if screenshot.size[0] <= 0 or screenshot.size[1] <= 0:
+                        print(f"截图大小无效: {screenshot.size}")
+                        return
+                    
+                    print(f"成功抓取屏幕，图像大小: {screenshot.size[0]}x{screenshot.size[1]}")
+                    
+                    # 转换截图为PIL图像
+                    img = Image.frombytes("RGB", screenshot.size, screenshot.rgb)
+                    
+                    # 临时保存文件，确保图像数据正确
+                    if not os.path.exists("output"):
+                        os.makedirs("output")
+                    
+                    # 生成临时文件名
+                    import datetime
+                    timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+                    temp_filename = f"output/edit_{timestamp}.png"
+                    img.save(temp_filename)
+                    print(f"临时文件已保存: {temp_filename}")
+                    
+                    # 使用保存的文件创建QPixmap
+                    pixmap = QPixmap(temp_filename)
+                    
+                    if not pixmap.isNull() and pixmap.width() > 0 and pixmap.height() > 0:
+                        print(f"创建有效的QPixmap: {pixmap.width()}x{pixmap.height()}")
+                        
+                        # 创建并显示编辑器
+                        self.screenshot_editor = edit_screenshot(pixmap)
+                        
+                        # 连接编辑完成信号
+                        self.screenshot_editor.editingFinished.connect(self.on_screenshot_edited)
+                        
+                        print("启动截图编辑器")
+                    else:
+                        print(f"无法创建有效的QPixmap，大小: {pixmap.width()}x{pixmap.height()}")
+                except Exception as e:
+                    print(f"截图过程中出错: {e}")
+        except Exception as e:
+            print(f"编辑截图操作失败: {e}")
+        finally:
+            # 关闭所有遮罩窗口
+            for widget in QApplication.topLevelWidgets():
+                if isinstance(widget, ScreenOverlay):
+                    widget.close()
+            
+            print("编辑截图操作完成")
+
+    def on_screenshot_edited(self, edited_pixmap):
+        """当截图编辑完成时调用"""
+        print("截图编辑完成")
+        
+        # 保存编辑后的图片
+        if not os.path.exists("output"):
+            os.makedirs("output")
+        
+        # 生成文件名
+        import datetime
+        timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f"output/edited_{timestamp}.png"
+        edited_pixmap.save(filename)
+        
+        print(f"编辑后的截图已保存: {filename}")
+        
+        # 将截图复制到剪贴板
+        QApplication.clipboard().setPixmap(edited_pixmap)
+        print("编辑后的截图已复制到剪贴板")
+        
+        # 重置编辑模式
+        self.is_editing = False
+
     def quit_app(self):
         print("退出程序")
         # 注销全局热键
         try:
             hwnd = int(self.event_filter.winId())
             win32gui.UnregisterHotKey(hwnd, HOTKEY_ID)
-            win32gui.UnregisterHotKey(hwnd, FLOATING_HOTKEY_ID)  # 注销Ctrl+W热键
+            win32gui.UnregisterHotKey(hwnd, FLOATING_HOTKEY_ID)
+            win32gui.UnregisterHotKey(hwnd, EDIT_HOTKEY_ID)  # 注销Ctrl+R热键
         except:
             pass
         
